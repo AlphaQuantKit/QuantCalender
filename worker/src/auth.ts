@@ -57,22 +57,43 @@ export async function clearLoginFailures(env: Env, key: string): Promise<void> {
   await env.DB.prepare('DELETE FROM login_attempts WHERE key_hash = ?1').bind(key).run()
 }
 
-export async function createSession(context: AppContext, role: Role, memberId: string | null) {
+// Reserve attempts atomically before expensive password work. Account keys are
+// independent of source IP, so switching IPs does not bypass the per-user budget.
+export async function consumePasswordAttempt(env: Env, scope: string, identity: string, maximum: number): Promise<boolean> {
+  const key = await hmacSha256(`password:${scope}:${identity}`, env.SESSION_SECRET)
+  const now = Date.now()
+  const row = await env.DB.prepare(`
+    INSERT INTO login_attempts (key_hash, window_started_at, attempt_count, locked_until, updated_at)
+    VALUES (?1, ?2, 1, NULL, ?2)
+    ON CONFLICT(key_hash) DO UPDATE SET
+      attempt_count = CASE WHEN window_started_at <= ?3 THEN 1 ELSE attempt_count + 1 END,
+      window_started_at = CASE WHEN window_started_at <= ?3 THEN ?2 ELSE window_started_at END,
+      updated_at = ?2
+    RETURNING attempt_count
+  `).bind(key, now, now - 15 * 60 * 1000).first<{ attempt_count: number }>()
+  return row !== null && row.attempt_count <= maximum
+}
+
+export async function createSession(context: AppContext, role: Role, memberId: string | null, passwordVersion = 0) {
   const token = randomToken()
   const csrfToken = randomToken()
   const now = Date.now()
   const expiresAt = now + SESSION_SECONDS * 1000
-  const statements = [context.env.DB.prepare('INSERT INTO sessions (id, token_hash, csrf_hash, member_id, role, expires_at, created_at, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)')
-    .bind(crypto.randomUUID(), await sessionTokenHash(context.env, token, role), await sha256(csrfToken), memberId, role, expiresAt, now)]
+  const sessionId = crypto.randomUUID()
+  const statements = [context.env.DB.prepare(`INSERT INTO sessions (id, token_hash, csrf_hash, member_id, role, expires_at, created_at, last_seen_at, password_version)
+    SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8
+    WHERE ?5 = 'admin' OR EXISTS (SELECT 1 FROM members WHERE id = ?4 AND active = 1 AND password_version = ?8)`)
+    .bind(sessionId, await sessionTokenHash(context.env, token, role), await sha256(csrfToken), memberId, role, expiresAt, now, passwordVersion)]
   if (role === 'member' && memberId) {
     statements.push(context.env.DB.prepare(`
       INSERT INTO member_activity (member_id, first_login_at, last_login_at, last_active_at, login_count)
-      VALUES (?1, ?2, ?2, ?2, 1)
+      SELECT ?1, ?2, ?2, ?2, 1 WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ?3)
       ON CONFLICT(member_id) DO UPDATE SET last_login_at = excluded.last_login_at,
         last_active_at = excluded.last_active_at, login_count = member_activity.login_count + 1
-    `).bind(memberId, now))
+    `).bind(memberId, now, sessionId))
   }
-  await context.env.DB.batch(statements)
+  const results = await context.env.DB.batch(statements)
+  if (!results[0]?.meta.changes) return null
 
   const production = context.env.APP_ENV === 'production'
   setCookie(context, production ? '__Host-wq_session' : 'wq_session', token, {
@@ -93,13 +114,14 @@ export async function currentSession(context: AppContext): Promise<SessionRecord
   const memberHash = await sessionTokenHash(context.env, token, 'member')
   const adminHash = await sessionTokenHash(context.env, token, 'admin')
   const row = await context.env.DB.prepare(`
-    SELECT s.*, m.wq_id_hint, m.country, m.active, m.public_wq_id
+    SELECT s.*, m.wq_id_hint, m.country, m.active, m.public_wq_id,
+      m.password_version AS member_password_version, (m.password_hash IS NULL) AS password_is_default
     FROM sessions s
     LEFT JOIN members m ON m.id = s.member_id
     WHERE s.token_hash IN (?1, ?2) AND s.expires_at > ?3
   `).bind(memberHash, adminHash, now).first() as SessionRecord | null
   if (!row) return null
-  if (row.role === 'member' && (!row.member_id || row.active !== 1)) return null
+  if (row.role === 'member' && (!row.member_id || row.active !== 1 || row.password_version !== row.member_password_version)) return null
   if (now - row.last_seen_at > 5 * 60 * 1000) {
     const statements = [context.env.DB.prepare('UPDATE sessions SET last_seen_at = ?2 WHERE id = ?1').bind(row.id, now)]
     if (row.role === 'member' && row.member_id) {

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
-export const countrySchema = z.enum(['CN', 'HK'])
+// Platform country/region codes, without a geographic allowlist.
+export const countrySchema = z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, '地区须为两位字母代码')
 export const eventStatusSchema = z.enum(['draft', 'pending', 'published', 'rejected', 'cancelled'])
 export const recurrenceKindSchema = z.enum(['none', 'weekly', 'biweekly', 'monthly'])
 
@@ -44,12 +45,24 @@ export const meetingInputSchema = z.object({
 
 export const memberLoginSchema = z.object({
   wqId: z.string().trim().min(2).max(64),
+  password: z.string().min(1).max(128),
   turnstileToken: z.string().max(4096).default('')
 })
 
 export const adminLoginSchema = memberLoginSchema.extend({
   password: z.string().min(12).max(256)
 })
+
+export const newMemberPasswordSchema = z.string().min(12, '新密码至少 12 位').max(128, '新密码最多 128 位')
+  .refine(value => value.trim().length > 0, '密码不能全为空白')
+export const memberPasswordChangeSchema = z.object({
+  currentPassword: z.string().min(1).max(128),
+  newPassword: newMemberPasswordSchema
+}).strict()
+export const adminMemberPasswordSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('set'), newPassword: newMemberPasswordSchema }).strict(),
+  z.object({ action: z.literal('reset') }).strict()
+])
 
 export const memberImportRowSchema = z.object({
   wqId: z.string().trim().min(2).max(64),
@@ -240,7 +253,7 @@ export interface LeaderboardEntry {
   memberId: string
   wqId: string
   hasFullWqId: boolean
-  country: 'CN' | 'HK'
+  country: string
   submissionCount: number
   approvedCount: number
   approvalRate: number
@@ -293,8 +306,9 @@ export interface SessionUser {
   role: 'member' | 'admin'
   memberId: string | null
   wqIdHint: string
-  country: 'CN' | 'HK' | null
+  country: string | null
   publicWqId: boolean | null
+  passwordChangeRequired: boolean
   expiresAt: string
 }
 

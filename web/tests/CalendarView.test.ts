@@ -12,7 +12,7 @@ vi.mock('../src/api', () => ({
 describe('CalendarView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    session.user = { role:'member', memberId:'member-1', wqIdHint:'••••1234', country:'CN', publicWqId:true, expiresAt:'2099-01-01T00:00:00Z' }
+    session.user = { role:'member', memberId:'member-1', wqIdHint:'••••1234', country:'CN', publicWqId:true, passwordChangeRequired:false, expiresAt:'2099-01-01T00:00:00Z' }
     vi.mocked(api).mockResolvedValue({
       occurrences: [{
         eventId: 'meeting-1', occurrenceKey: '2099-08-01T10:00:00Z', title: '顾问周会',

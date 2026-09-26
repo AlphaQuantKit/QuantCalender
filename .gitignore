@@ -14,3 +14,4 @@ DEPLOYMENT.md
 .DS_Store
 Thumbs.db
 wq-calendar-backups/
+__pycache__/

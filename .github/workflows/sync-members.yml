@@ -1,0 +1,45 @@
+name: Sync platform members
+
+on:
+  schedule:
+    # 04:43 UTC = 12:43 Asia/Shanghai. GitHub schedules can be delayed.
+    - cron: '43 4 * * *'
+  workflow_dispatch:
+    inputs:
+      board_date:
+        description: '榜单日期 YYYY-MM-DD（留空使用仓库变量或北京时间昨天）'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-platform-members
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.event_name == 'workflow_dispatch' || vars.MEMBER_SYNC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+      - run: python -m pip install -r scripts/requirements.txt
+      - name: Fetch complete board and merge members
+        run: python scripts/sync_members.py
+        env:
+          WQ_USERNAME: ${{ secrets.WQ_USERNAME }}
+          WQ_PASSWORD: ${{ secrets.WQ_PASSWORD }}
+          MEMBER_SYNC_TOKEN: ${{ secrets.MEMBER_SYNC_TOKEN }}
+          CALENDAR_API_URL: ${{ vars.VITE_API_BASE_URL }}
+          WQ_BOARD_DATE: ${{ inputs.board_date || vars.WQ_BOARD_DATE }}
+          WQ_USER_FIELD: ${{ vars.WQ_USER_FIELD }}
+          WQ_COUNTRY_FIELD: ${{ vars.WQ_COUNTRY_FIELD }}

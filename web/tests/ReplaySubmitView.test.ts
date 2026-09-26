@@ -19,7 +19,7 @@ describe('ReplaySubmitView', () => {
   beforeEach(() => {
     routeQuery.value = {}
     vi.clearAllMocks()
-    session.user = { role:'member', memberId:'member-1', wqIdHint:'••••1234', country:'CN', publicWqId:true, expiresAt:'2099-01-01T00:00:00Z' }
+    session.user = { role:'member', memberId:'member-1', wqIdHint:'••••1234', country:'CN', publicWqId:true, passwordChangeRequired:false, expiresAt:'2099-01-01T00:00:00Z' }
     vi.mocked(api).mockImplementation(async (path) => path.startsWith('/v1/meetings?') ? { occurrences:[occurrence] } : { submission:{ id:'link-1', status:'pending' } })
   })
 

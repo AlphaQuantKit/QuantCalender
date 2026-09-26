@@ -5,7 +5,7 @@ import { login } from '../src/api'
 
 const routerPush = vi.hoisted(() => vi.fn())
 
-vi.mock('vue-router', () => ({ useRouter:() => ({ push:routerPush }) }))
+vi.mock('vue-router', () => ({ useRouter:() => ({ push:routerPush }), useRoute: () => ({ query: {} }) }))
 vi.mock('../src/api', () => ({ login:vi.fn(), ApiError:class ApiError extends Error {} }))
 
 describe('LoginView', () => {
@@ -27,6 +27,40 @@ describe('LoginView', () => {
     expect(wrapper.find('[role="alert"]').text()).toBe('请先完成人机验证')
     expect(login).not.toHaveBeenCalled()
     expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('sends the member password and directs initial-password users to settings', async () => {
+    vi.stubEnv('VITE_TURNSTILE_SITE_KEY', '')
+    vi.mocked(login).mockResolvedValue({ user: { role: 'member', passwordChangeRequired: true }, csrfToken: 'csrf' })
+    const wrapper = mount(LoginView)
+    expect(wrapper.find('#login-password').attributes('type')).toBe('password')
+    expect(wrapper.text()).toContain('请勿填写 BRAIN 平台密码')
+    await wrapper.find('#wq-id').setValue('ID1234')
+    await wrapper.find('#login-password').setValue('ID1234')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(login).toHaveBeenCalledWith('/v1/session/member', { wqId: 'ID1234', password: 'ID1234', turnstileToken: '' })
+    expect(routerPush).toHaveBeenCalledWith('/calendar-settings')
+    expect((wrapper.find('#login-password').element as HTMLInputElement).value).toBe('')
+    wrapper.unmount()
+  })
+
+  it('directs members with a custom password to the calendar and retains admin login', async () => {
+    vi.stubEnv('VITE_TURNSTILE_SITE_KEY', '')
+    vi.mocked(login).mockResolvedValue({ user: { role: 'member', passwordChangeRequired: false }, csrfToken: 'csrf' })
+    const wrapper = mount(LoginView)
+    await wrapper.find('#wq-id').setValue('ID1234')
+    await wrapper.find('#login-password').setValue('custom password')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(routerPush).toHaveBeenCalledWith('/')
+    await wrapper.findAll('button').find(button => button.text() === '管理员')!.trigger('click')
+    await wrapper.find('#login-password').setValue('admin password')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(login).toHaveBeenCalledWith('/v1/session/admin', { wqId: 'ID1234', password: 'admin password', turnstileToken: '' })
+    expect(routerPush).toHaveBeenCalledWith('/admin')
     wrapper.unmount()
   })
 })

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../src/api'
 import CalendarSettingsView from '../src/views/CalendarSettingsView.vue'
 import { session } from '../src/state'
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 
 vi.mock('../src/api', () => ({
   api: vi.fn(),
@@ -62,7 +63,7 @@ describe('CalendarSettingsView', () => {
   })
 
   it('updates the global contributor identity preference', async () => {
-    session.user = { role:'member', memberId:'member-1', wqIdHint:'••••1234', country:'CN', publicWqId:true, expiresAt:'2099-01-01T00:00:00Z' }
+    session.user = { role:'member', memberId:'member-1', wqIdHint:'••••1234', country:'CN', publicWqId:true, passwordChangeRequired:false, expiresAt:'2099-01-01T00:00:00Z' }
     vi.mocked(api).mockImplementation(async (path) => {
       if (path === '/v1/calendar-feed') return { feed:{ exists:false, alarm_minutes:30 } }
       if (path === '/v1/me/preferences') return { user:{ ...session.user!, publicWqId:false } }

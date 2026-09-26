@@ -4,3 +4,5 @@ ADMIN_PASSWORD_HASH=replace-me
 WQ_ID_HMAC_SECRET=replace-with-32-random-bytes
 TURNSTILE_SECRET=1x0000000000000000000000000000000AA
 SESSION_SECRET=replace-with-another-32-random-bytes
+# Optional: scoped machine credential for GitHub Actions member sync only.
+MEMBER_SYNC_TOKEN=replace-with-a-separate-32-byte-random-token

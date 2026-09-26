@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { login, ApiError } from '../api'
 import { setUser } from '../state'
 import type { SessionUser } from '@wq-calendar/shared'
@@ -15,6 +15,7 @@ declare global {
 }
 
 const router = useRouter()
+const route = useRoute()
 const mode = ref<'member' | 'admin'>('member')
 const wqId = ref('')
 const password = ref('')
@@ -50,10 +51,11 @@ async function submit() {
   busy.value = true
   try {
     const data = mode.value === 'member'
-      ? await login('/v1/session/member', { wqId: wqId.value, turnstileToken: turnstileToken.value })
+      ? await login('/v1/session/member', { wqId: wqId.value, password: password.value, turnstileToken: turnstileToken.value })
       : await login('/v1/session/admin', { wqId: wqId.value, password: password.value, turnstileToken: turnstileToken.value })
     setUser(data.user as SessionUser)
-    await router.push(mode.value === 'admin' ? '/admin' : '/')
+    password.value = ''
+    await router.push(mode.value === 'admin' ? '/admin' : (data.user as SessionUser).passwordChangeRequired ? '/calendar-settings' : '/')
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : '登录失败，请稍后重试'
     turnstileToken.value = ''
@@ -79,13 +81,15 @@ async function submit() {
         <p class="eyebrow">SECURE ACCESS</p>
         <h2>{{ mode === 'member' ? '成员登录' : '管理员登录' }}</h2>
         <p class="subtitle">登录状态保持 30 天。</p>
+        <p v-if="route.query.password === 'changed'" class="success-box" role="status">密码已修改，旧登录会话已退出。请使用新密码重新登录。</p>
         <div class="login-switch">
-          <button type="button" :class="{ active: mode === 'member' }" @click="mode = 'member'">普通成员</button>
-          <button type="button" :class="{ active: mode === 'admin' }" @click="mode = 'admin'">管理员</button>
+          <button type="button" :disabled="busy" :class="{ active: mode === 'member' }" @click="mode = 'member'; password = ''">普通成员</button>
+          <button type="button" :disabled="busy" :class="{ active: mode === 'admin' }" @click="mode = 'admin'; password = ''">管理员</button>
         </div>
         <form class="stack" @submit.prevent="submit">
           <div class="field"><label for="wq-id">WQ_ID</label><input id="wq-id" v-model="wqId" required autocomplete="username" placeholder="输入你的 WQ_ID" /></div>
-          <div v-if="mode === 'admin'" class="field"><label for="admin-password">管理员密码</label><input id="admin-password" v-model="password" required type="password" autocomplete="current-password" /></div>
+          <div class="field"><label for="login-password">{{ mode === 'admin' ? '管理员密码' : '成员密码' }}</label><input id="login-password" v-model="password" required type="password" :maxlength="mode === 'admin' ? 256 : 128" autocomplete="current-password" /></div>
+          <p v-if="mode === 'member'" class="fine-print">初始密码为你的 WQ_ID（字母不区分大小写）。这是日历站点密码，请勿填写 BRAIN 平台密码；忘记密码请联系日历管理员重置。</p>
           <div ref="widget" aria-label="人机验证"></div>
           <div v-if="error" class="error-box" role="alert">{{ error }}</div>
           <button class="button" type="submit" :disabled="busy">{{ busy ? '正在验证…' : '进入 WQ 日历' }}</button>

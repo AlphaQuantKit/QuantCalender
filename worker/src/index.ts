@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { Temporal } from '@js-temporal/polyfill'
 import {
   adminLoginSchema,
@@ -6,7 +7,6 @@ import {
   decisionSchema,
   exceptionSchema,
   identityPreferenceSchema,
-  importRowsSchema,
   meetingInputSchema,
   memberLoginSchema
 } from '@wq-calendar/shared'
@@ -16,6 +16,7 @@ import { allowedOrigins, apiError, readJson } from './http'
 import {
   checkLoginLimit,
   clearLoginFailures,
+  consumePasswordAttempt,
   createSession,
   currentSession,
   destroyCurrentSession,
@@ -27,13 +28,16 @@ import {
   verifyMutation,
   verifyTurnstile
 } from './auth'
-import { decryptWqId, encryptWqId, hmacSha256, normalizeWqId, randomToken, sha256, wqIdHint } from './crypto'
+import { decryptWqId, encryptWqId, hmacSha256, normalizeWqId, randomToken, sha256 } from './crypto'
 import { audit, listEventExceptions, listPublishedEvents } from './db'
 import { expandEvent, normalizeMeetingTimes, publicEvent, type EventRow } from './events'
 import { buildCalendarIcs } from './ics'
 import { visibleMemberIdentity } from './identity'
 import { publishedReplayOccurrenceKeys, registerReplayRoutes, replayOccurrenceIdentity } from './replays'
 import { listCalendarImportantItems, registerImportantItemRoutes } from './important-items'
+import { registerMemberImportRoutes } from './member-imports'
+import { registerMemberPasswordRoutes } from './member-passwords'
+import { verifyMemberPassword } from './passwords'
 
 type Variables = { session: SessionRecord }
 const app = new Hono<{ Bindings: Env; Variables: Variables }>()
@@ -65,6 +69,7 @@ function sessionUser(session: SessionRecord) {
     wqIdHint: session.role === 'admin' ? '管理员' : (session.wq_id_hint || '成员'),
     country: session.country,
     publicWqId: session.role === 'member' ? session.public_wq_id === 1 : null,
+    passwordChangeRequired: session.role === 'member' && session.password_is_default === 1,
     expiresAt: new Date(session.expires_at).toISOString()
   }
 }
@@ -128,30 +133,29 @@ async function updateEvent(env: Env, id: string, input: MeetingInput, status?: E
   return env.DB.prepare('SELECT * FROM events WHERE id = ?1').bind(id).first<EventRow>()
 }
 
-app.post('/v1/session/member', async (context) => {
+app.post('/v1/session/member', bodyLimit({ maxSize: 8192 }), async (context) => {
   const parsed = memberLoginSchema.safeParse(await readJson(context))
-  if (!parsed.success) return apiError(context, 422, 'VALIDATION_ERROR', 'WQ_ID 格式不正确')
+  if (!parsed.success) return apiError(context, 422, 'VALIDATION_ERROR', '请填写有效的 WQ_ID 和密码')
   const wqId = normalizeWqId(parsed.data.wqId)
   const remoteIp = context.req.header('cf-connecting-ip') || 'local'
-  const rateKey = await loginRateKey(context.env, 'member', remoteIp, wqId)
-  const limit = await checkLoginLimit(context.env, rateKey, 10)
-  if (!limit.allowed) return apiError(context, 429, 'TOO_MANY_ATTEMPTS', `尝试次数过多，请在 ${Math.ceil(limit.retryAfter / 60)} 分钟后重试`)
+  if (!await consumePasswordAttempt(context.env, 'login-ip', remoteIp, 60)
+    || !await consumePasswordAttempt(context.env, 'login-account', wqId, 15)) {
+    return apiError(context, 429, 'TOO_MANY_ATTEMPTS', '登录尝试过多，请在 15 分钟后重试')
+  }
   if (!await verifyTurnstile(context.env, parsed.data.turnstileToken, remoteIp)) {
-    await recordLoginFailure(context.env, rateKey)
-    return apiError(context, 401, 'LOGIN_FAILED', '登录失败，请检查 WQ_ID 和人机验证')
+    return apiError(context, 401, 'LOGIN_FAILED', '登录失败，请检查 WQ_ID、密码和人机验证')
   }
   const wqHash = await hmacSha256(wqId, context.env.WQ_ID_HMAC_SECRET)
-  const member = await context.env.DB.prepare("SELECT id, wq_id_hint, country, public_wq_id FROM members WHERE wq_id_hash = ?1 AND active = 1 AND country IN ('CN', 'HK')")
-    .bind(wqHash).first<{ id: string; wq_id_hint: string; country: 'CN' | 'HK'; public_wq_id: number }>()
-  if (!member) {
-    await recordLoginFailure(context.env, rateKey)
-    return apiError(context, 401, 'LOGIN_FAILED', '登录失败，请检查 WQ_ID 和人机验证')
+  const member = await context.env.DB.prepare('SELECT id, wq_id_hint, country, public_wq_id, password_hash, password_version FROM members WHERE wq_id_hash = ?1 AND active = 1')
+    .bind(wqHash).first<{ id: string; wq_id_hint: string; country: string; public_wq_id: number; password_hash: string | null; password_version: number }>()
+  if (!member || !await verifyMemberPassword(parsed.data.password, member.password_hash, wqHash, context.env.WQ_ID_HMAC_SECRET)) {
+    return apiError(context, 401, 'LOGIN_FAILED', '登录失败，请检查 WQ_ID、密码和人机验证')
   }
-  await clearLoginFailures(context.env, rateKey)
   await context.env.DB.prepare('UPDATE members SET wq_id_ciphertext = COALESCE(wq_id_ciphertext, ?2), updated_at = ?3 WHERE id = ?1')
     .bind(member.id, await encryptWqId(wqId, context.env.WQ_ID_HMAC_SECRET), Date.now()).run()
-  const created = await createSession(context, 'member', member.id)
-  return context.json({ user: { role: 'member', memberId: member.id, wqIdHint: member.wq_id_hint, country: member.country, publicWqId: member.public_wq_id === 1, expiresAt: new Date(created.expiresAt).toISOString() }, csrfToken: created.csrfToken })
+  const created = await createSession(context, 'member', member.id, member.password_version)
+  if (!created) return apiError(context, 401, 'LOGIN_FAILED', '登录状态已变化，请重新登录')
+  return context.json({ user: { role: 'member', memberId: member.id, wqIdHint: member.wq_id_hint, country: member.country, publicWqId: member.public_wq_id === 1, passwordChangeRequired: member.password_hash === null, expiresAt: new Date(created.expiresAt).toISOString() }, csrfToken: created.csrfToken })
 })
 
 app.post('/v1/session/admin', async (context) => {
@@ -171,7 +175,8 @@ app.post('/v1/session/admin', async (context) => {
   }
   await clearLoginFailures(context.env, rateKey)
   const created = await createSession(context, 'admin', null)
-  return context.json({ user: { role: 'admin', memberId: null, wqIdHint: '管理员', country: null, publicWqId: null, expiresAt: new Date(created.expiresAt).toISOString() }, csrfToken: created.csrfToken })
+  if (!created) return apiError(context, 500, 'SESSION_FAILED', '无法创建会话')
+  return context.json({ user: { role: 'admin', memberId: null, wqIdHint: '管理员', country: null, publicWqId: null, passwordChangeRequired: false, expiresAt: new Date(created.expiresAt).toISOString() }, csrfToken: created.csrfToken })
 })
 
 app.get('/v1/me', requireAuth(), (context) => context.json({ user: sessionUser(context.get('session')) }))
@@ -265,7 +270,7 @@ app.get('/v1/leaderboard', requireAuth(), async (context) => {
     wq_id_hint: string
     wq_id_ciphertext: string | null
     public_wq_id: number
-    country: 'CN' | 'HK'
+    country: string
     submission_count: number
     approved_count: number
     contributed_meeting_count?: number
@@ -498,82 +503,13 @@ app.put('/v1/admin/events/:id/exceptions/:occurrenceKey', requireAuth('admin'), 
   return context.json({ saved: true })
 })
 
-app.post('/v1/admin/member-imports', requireAuth('admin'), async (context) => {
-  const session = context.get('session')
-  if (!await verifyMutation(context, session)) return apiError(context, 403, 'CSRF_FAILED', '安全校验失败')
-  const id = crypto.randomUUID()
-  await context.env.DB.prepare("INSERT INTO member_imports (id, status, total_rows, created_at) VALUES (?1, 'staging', 0, ?2)").bind(id, Date.now()).run()
-  return context.json({ importId: id }, 201)
-})
-
-app.post('/v1/admin/member-imports/:id/rows', requireAuth('admin'), async (context) => {
-  const session = context.get('session')
-  if (!await verifyMutation(context, session)) return apiError(context, 403, 'CSRF_FAILED', '安全校验失败')
-  const parsed = importRowsSchema.safeParse(await readJson(context))
-  if (!parsed.success) return apiError(context, 422, 'VALIDATION_ERROR', '成员批次格式无效')
-  const importRow = await context.env.DB.prepare("SELECT id FROM member_imports WHERE id = ?1 AND status = 'staging'").bind(context.req.param('id')).first()
-  if (!importRow) return apiError(context, 409, 'IMPORT_NOT_STAGING', '导入批次不可用')
-  const statements: D1PreparedStatement[] = []
-  const recordDate = Temporal.Now.instant().toZonedDateTimeISO('Asia/Shanghai').toPlainDate().toString()
-  for (const row of parsed.data.rows) {
-    const normalized = normalizeWqId(row.wqId)
-    statements.push(context.env.DB.prepare(`
-      INSERT INTO member_import_rows (import_id, wq_id_hash, wq_id_hint, wq_id_ciphertext, country, record_date)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-      ON CONFLICT(import_id, wq_id_hash) DO UPDATE SET wq_id_ciphertext = excluded.wq_id_ciphertext,
-        country = excluded.country, record_date = excluded.record_date
-    `).bind(
-      context.req.param('id'),
-      await hmacSha256(normalized, context.env.WQ_ID_HMAC_SECRET),
-      wqIdHint(normalized),
-      await encryptWqId(normalized, context.env.WQ_ID_HMAC_SECRET),
-      row.country,
-      recordDate
-    ))
-  }
-  await context.env.DB.batch(statements)
-  const count = await context.env.DB.prepare('SELECT COUNT(*) AS count FROM member_import_rows WHERE import_id = ?1').bind(context.req.param('id')).first<{ count: number }>()
-  await context.env.DB.prepare('UPDATE member_imports SET total_rows = ?2 WHERE id = ?1').bind(context.req.param('id'), count?.count || 0).run()
-  return context.json({ stagedRows: count?.count || 0 })
-})
-
-app.get('/v1/admin/member-imports/:id', requireAuth('admin'), async (context) => {
-  const batch = await context.env.DB.prepare('SELECT * FROM member_imports WHERE id = ?1').bind(context.req.param('id')).first()
-  if (!batch) return apiError(context, 404, 'NOT_FOUND', '导入批次不存在')
-  const preview = await context.env.DB.prepare('SELECT wq_id_hint, country, record_date FROM member_import_rows WHERE import_id = ?1 ORDER BY wq_id_hint LIMIT 20').bind(context.req.param('id')).all()
-  return context.json({ batch, preview: preview.results })
-})
-
-app.post('/v1/admin/member-imports/:id/commit', requireAuth('admin'), async (context) => {
-  const session = context.get('session')
-  if (!await verifyMutation(context, session)) return apiError(context, 403, 'CSRF_FAILED', '安全校验失败')
-  const importId = context.req.param('id')
-  const batch = await context.env.DB.prepare("SELECT total_rows FROM member_imports WHERE id = ?1 AND status = 'staging'").bind(importId).first<{ total_rows: number }>()
-  if (!batch || batch.total_rows === 0) return apiError(context, 409, 'EMPTY_IMPORT', '导入批次为空或已经提交')
-  const now = Date.now()
-  await context.env.DB.batch([
-    context.env.DB.prepare(`
-      INSERT INTO members (id, wq_id_hash, wq_id_hint, wq_id_ciphertext, country, record_date, active, import_batch_id, created_at, updated_at)
-      SELECT lower(hex(randomblob(16))), wq_id_hash, wq_id_hint, wq_id_ciphertext, country, record_date, 1, ?1, ?2, ?2
-      FROM member_import_rows WHERE import_id = ?1 AND 1 = 1
-      ON CONFLICT(wq_id_hash) DO UPDATE SET wq_id_hint = excluded.wq_id_hint, wq_id_ciphertext = excluded.wq_id_ciphertext, country = excluded.country,
-        record_date = excluded.record_date, active = 1, import_batch_id = excluded.import_batch_id, updated_at = excluded.updated_at
-    `).bind(importId, now),
-    context.env.DB.prepare('UPDATE members SET active = 0, updated_at = ?2 WHERE wq_id_hash NOT IN (SELECT wq_id_hash FROM member_import_rows WHERE import_id = ?1)').bind(importId, now),
-    context.env.DB.prepare("DELETE FROM sessions WHERE role = 'member' AND member_id IN (SELECT id FROM members WHERE active = 0)"),
-    context.env.DB.prepare('UPDATE calendar_tokens SET revoked_at = ?1, updated_at = ?1 WHERE member_id IN (SELECT id FROM members WHERE active = 0) AND revoked_at IS NULL').bind(now),
-    context.env.DB.prepare("UPDATE member_imports SET status = 'committed', committed_at = ?2 WHERE id = ?1 AND status = 'staging'").bind(importId, now)
-  ])
-  await audit(context.env, session, 'commit_import', 'member_import', importId, { rows: batch.total_rows })
-  return context.json({ committed: true, activeMembers: batch.total_rows })
-})
 
 app.get('/v1/admin/member-usage', requireAuth('admin'), async (context) => {
   type UsageRow = {
     id: string
     wq_id_hint: string
     wq_id_ciphertext: string | null
-    country: 'CN' | 'HK'
+    country: string
     active: number
     record_date: string
     first_login_at: number | null
@@ -813,6 +749,8 @@ app.get('/ics/:token/calendar.ics', async (context) => {
 
 registerReplayRoutes(app)
 registerImportantItemRoutes(app)
+registerMemberImportRoutes(app)
+registerMemberPasswordRoutes(app)
 
 app.get('/v1/admin/audit', requireAuth('admin'), async (context) => {
   const result = await context.env.DB.prepare('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 200').all()

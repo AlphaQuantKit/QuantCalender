@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { CalendarDays, CircleHelp, Flag, Github, LogOut, PlayCircle, Settings, ShieldCheck, Trophy, Video } from 'lucide-vue-next'
 import { logout, session } from './state'
+import PasswordReminder from './components/PasswordReminder.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -47,6 +48,7 @@ async function signOut() {
     </header>
 
     <main :class="isLogin ? '' : 'page-container'">
+      <PasswordReminder v-if="!isLogin" />
       <RouterView />
     </main>
 

@@ -12,7 +12,7 @@ describe('ReplaysView', () => {
   beforeEach(() => {
     routeQuery.value = {}
     vi.clearAllMocks()
-    session.user = { role:'member', memberId:'member-1', wqIdHint:'••••1234', country:'CN', publicWqId:true, expiresAt:'2099-01-01T00:00:00Z' }
+    session.user = { role:'member', memberId:'member-1', wqIdHint:'••••1234', country:'CN', publicWqId:true, passwordChangeRequired:false, expiresAt:'2099-01-01T00:00:00Z' }
     vi.mocked(api).mockResolvedValue({
       groups: [{ id:'group-1', eventId:'event-1', occurrenceKey:'2026-07-24T12:00:00Z', title:'顾问周会', meetingDate:'2026-07-24', links:[
         { id:'link-1', provider:'baidu', providerLabel:'百度网盘', shareUrl:'https://pan.baidu.com/s/a', accessCode:'3k8p', note:'完整录像', contributorWqId:'KZ12345', contributorHasFullWqId:true, openReportCount:0, reportedByMe:false },

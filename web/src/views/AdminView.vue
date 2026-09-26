@@ -3,17 +3,19 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { CalendarDays, FileUp, Flag, Pencil, PlaySquare, Plus, ShieldX, XCircle } from 'lucide-vue-next'
 import type { MeetingInput, MeetingOccurrence } from '@wq-calendar/shared'
+import { memberImportRowSchema } from '@wq-calendar/shared'
 import { api, ApiError } from '../api'
 import { session } from '../state'
 import MeetingForm from '../components/MeetingForm.vue'
 import LeaderboardPanel from '../components/LeaderboardPanel.vue'
 import AdminReplayPanel from '../components/AdminReplayPanel.vue'
 import AdminImportantItemPanel from '../components/AdminImportantItemPanel.vue'
+import AdminMemberPassword from '../components/AdminMemberPassword.vue'
 
 type Tab = 'pending' | 'events' | 'replays' | 'important' | 'members' | 'usage' | 'leaderboard' | 'audit'
 type UsageFilter = 'all' | 'logged' | 'not_logged' | 'subscribed' | 'not_subscribed' | 'active_session'
 type UsageMember = {
-  id: string; wqId: string; hasFullWqId: boolean; country: 'CN' | 'HK'; active: boolean; recordDate: string
+  id: string; wqId: string; hasFullWqId: boolean; country: string; active: boolean; recordDate: string
   firstLoginAt: string | null; lastLoginAt: string | null; lastActiveAt: string | null; loginCount: number
   activeSessionCount: number; subscribed: boolean; alarmMinutes: number | null
   subscriptionCreatedAt: string | null; subscriptionUpdatedAt: string | null
@@ -29,6 +31,7 @@ const events = ref<any[]>([])
 const occurrences = ref<MeetingOccurrence[]>([])
 const logs = ref<any[]>([])
 const usageMembers = ref<UsageMember[]>([])
+const passwordMember = ref<UsageMember | null>(null)
 const usageSummary = ref<UsageSummary>({ activeMembers: 0, loggedInMembers: 0, active30Days: 0, subscribedMembers: 0, subscriptionRate: 0 })
 const usageLoaded = ref(false)
 const usageLoading = ref(false)
@@ -45,7 +48,7 @@ const editorStatus = ref<'draft' | 'pending' | 'published' | 'rejected' | 'cance
 const reviewNotes = ref<Record<string, string>>({})
 
 const csvFile = ref<File | null>(null)
-const csvRows = ref<Array<{ wqId: string; country: 'CN' | 'HK' }>>([])
+const csvRows = ref<Array<{ wqId: string; country: string }>>([])
 const csvInvalid = ref<string[]>([])
 const importProgress = ref('')
 
@@ -120,6 +123,12 @@ async function openUsage() {
   await loadUsage(1)
 }
 
+async function passwordSaved() {
+  passwordMember.value = null
+  notice.value = '成员密码已更新，该成员旧登录会话已失效。'
+  await loadUsage()
+}
+
 async function loadUsage(page = usagePagination.value.page) {
   usageLoading.value = true; error.value = ''
   try {
@@ -177,10 +186,10 @@ async function readCsv(file: File) {
     const cells = line.split(',').map((item) => item?.trim() || '')
     const [rawId = '', rawCountry = ''] = cells
     const wqId = rawId.toUpperCase(); const country = rawCountry.toUpperCase()
-    if (cells.length !== 2 || !wqId || !['CN','HK'].includes(country) || seen.has(wqId)) {
+    if (cells.length !== 2 || !memberImportRowSchema.safeParse({ wqId, country }).success || seen.has(wqId)) {
       csvInvalid.value.push(`第 ${index + 2} 行无效或重复`); return
     }
-    seen.add(wqId); csvRows.value.push({ wqId, country: country as 'CN' | 'HK' })
+    seen.add(wqId); csvRows.value.push({ wqId, country })
   })
 }
 
@@ -205,7 +214,7 @@ async function importMembers() {
       importProgress.value = `已暂存 ${Math.min(offset + 100, csvRows.value.length)} / ${csvRows.value.length}`
     }
     await api(`/v1/admin/member-imports/${created.importId}/commit`, { method:'POST', body:'{}' })
-    notice.value = `已启用 ${csvRows.value.length} 名 CN/HK 成员。`; importProgress.value = ''; csvRows.value = []; csvFile.value = null; usageLoaded.value = false
+    notice.value = `已启用 ${csvRows.value.length} 名成员。`; importProgress.value = ''; csvRows.value = []; csvFile.value = null; usageLoaded.value = false
   } catch (caught) { error.value = caught instanceof ApiError ? caught.message : '成员导入失败' }
   finally { busy.value = false }
 }
@@ -219,7 +228,7 @@ async function revokeAllAdminSessions() {
 </script>
 
 <template>
-  <div class="page-head"><div><p class="eyebrow">ADMIN CONSOLE</p><h1>日历管理</h1><p class="subtitle">审批成员投稿、维护会议系列和更新 CN/HK 成员名单。所有关键操作都会写入审计日志。</p></div><button class="button" @click="createEvent"><Plus :size="17" />新建会议</button></div>
+  <div class="page-head"><div><p class="eyebrow">ADMIN CONSOLE</p><h1>日历管理</h1><p class="subtitle">审批成员投稿、维护会议系列和更新各地区成员名单。所有关键操作都会写入审计日志。</p></div><button class="button" @click="createEvent"><Plus :size="17" />新建会议</button></div>
   <div v-if="error" class="error-box" style="margin-bottom:14px">{{ error }}</div><div v-if="notice" class="success-box" style="margin-bottom:14px">{{ notice }}</div>
 
   <div class="tabs"><button :class="{active:tab==='pending'}" @click="tab='pending'">待审 {{ pending.length + pendingReplayCount + pendingImportantCount }}</button><button :class="{active:tab==='events'}" @click="tab='events'">会议管理</button><button :class="{active:tab==='replays'}" @click="tab='replays'">回放管理</button><button :class="{active:tab==='important'}" @click="tab='important'">重要事项</button><button :class="{active:tab==='leaderboard'}" @click="tab='leaderboard'">投稿排行</button><button :class="{active:tab==='usage'}" @click="openUsage">使用统计</button><button :class="{active:tab==='members'}" @click="tab='members'">成员导入</button><button :class="{active:tab==='audit'}" @click="tab='audit'">审计日志</button></div>
@@ -255,11 +264,13 @@ async function revokeAllAdminSessions() {
   </section>
 
   <section v-if="tab==='members'" class="panel-grid">
-    <div class="card card-body stack"><h2>整体替换成员名单</h2><div class="notice-box">CSV 表头必须为 <code>wq_id,country</code>。只接受 CN/HK，重复 ID、额外列或非法行会阻止提交；导入日期由系统自动记录。</div><label class="button secondary" style="width:max-content"><FileUp :size="17" />选择 CSV<input type="file" accept=".csv,text/csv" hidden @change="onCsvChange" /></label><p v-if="csvFile">已选择：{{ csvFile.name }}</p><div v-if="csvRows.length" class="success-box">有效成员 {{ csvRows.length }} 名，其中 CN {{ csvRows.filter(r=>r.country==='CN').length }} 名、HK {{ csvRows.filter(r=>r.country==='HK').length }} 名。</div><div v-if="csvInvalid.length" class="error-box"><strong>发现 {{ csvInvalid.length }} 个问题</strong><ul><li v-for="item in csvInvalid.slice(0,10)" :key="item">{{ item }}</li></ul></div><p v-if="importProgress" class="muted">{{ importProgress }}</p><button class="button" :disabled="busy || !csvRows.length || !!csvInvalid.length" @click="importMembers">{{ busy ? '正在导入…' : '确认整体替换' }}</button></div>
+    <div class="card card-body stack"><h2>整体替换成员名单</h2><div class="notice-box">CSV 表头必须为 <code>wq_id,country</code>。支持各地区的两位字母代码（如 CN、HK、US、IN），重复 ID、额外列或非法行会阻止提交；导入日期由系统自动记录。</div><label class="button secondary" style="width:max-content"><FileUp :size="17" />选择 CSV<input type="file" accept=".csv,text/csv" hidden @change="onCsvChange" /></label><p v-if="csvFile">已选择：{{ csvFile.name }}</p><div v-if="csvRows.length" class="success-box">有效成员 {{ csvRows.length }} 名，覆盖 {{ new Set(csvRows.map(r=>r.country)).size }} 个地区。</div><div v-if="csvInvalid.length" class="error-box"><strong>发现 {{ csvInvalid.length }} 个问题</strong><ul><li v-for="item in csvInvalid.slice(0,10)" :key="item">{{ item }}</li></ul></div><p v-if="importProgress" class="muted">{{ importProgress }}</p><button class="button" :disabled="busy || !csvRows.length || !!csvInvalid.length" @click="importMembers">{{ busy ? '正在导入…' : '确认整体替换' }}</button></div>
+    <div class="card card-body stack"><h2>平台定时同步</h2><p>可通过 GitHub Actions 的 <code>Sync platform members</code> 工作流每日同步，也可手动运行。</p><p>在仓库 Secrets 配置 <code>WQ_USERNAME</code>、<code>WQ_PASSWORD</code>、<code>MEMBER_SYNC_TOKEN</code>，并按 README 设置 API 地址与启用开关。平台账号密码不会保存到网页或日历数据库。</p><p class="muted">自动同步仅新增、更新，不停用名单外成员；手动整体替换仍会停用缺失成员。运行结果可在 Actions 和审计日志中查看。</p></div>
     <aside class="card card-body"><h2>安全操作</h2><p class="fine-print">WQ_ID 使用 HMAC 作为登录索引，并保存一份仅管理员接口可解密的加密值；原始 CSV 不会进入仓库。</p><div class="divider"></div><button class="button danger" @click="revokeAllAdminSessions"><ShieldX :size="17" />撤销全部管理员会话</button></aside>
   </section>
 
   <section v-if="tab==='usage'" class="stack">
+    <AdminMemberPassword v-if="passwordMember" :key="passwordMember.id" :member-id="passwordMember.id" :wq-id="passwordMember.wqId" @saved="passwordSaved" @close="passwordMember=null" />
     <div v-if="usageLoading" class="empty-state">正在整理成员使用情况…</div>
     <template v-else-if="usageLoaded">
       <div class="metric-grid">
@@ -279,7 +290,7 @@ async function revokeAllAdminSessions() {
             <button class="button secondary small" type="button" @click="clearUsageFilters">清除</button>
           </div>
         </div>
-        <table class="data-table usage-table"><thead><tr><th>WQ_ID</th><th>地区</th><th>首次登录</th><th>最近登录 / 活跃</th><th>登录次数</th><th>有效会话</th><th>日历订阅</th></tr></thead><tbody><tr v-for="member in usageMembers" :key="member.id"><td><strong>{{ member.wqId }}</strong><br><span v-if="!member.hasFullWqId" class="muted">重新登录或导入后补全</span><span v-if="!member.active" class="status rejected">已停用</span></td><td>{{ member.country }}</td><td>{{ formatUsageTime(member.firstLoginAt) }}</td><td>{{ formatUsageTime(member.lastLoginAt) }}<br><span class="muted">活跃：{{ formatUsageTime(member.lastActiveAt) }}</span></td><td>{{ member.loginCount }}</td><td><span class="status" :class="member.activeSessionCount ? 'published' : 'draft'">{{ member.activeSessionCount ? `${member.activeSessionCount} 个` : '无' }}</span></td><td><span class="status" :class="member.subscribed ? 'published' : 'draft'">{{ member.subscribed ? '已订阅' : '未订阅' }}</span><template v-if="member.subscribed"><br><span class="muted">{{ formatUsageTime(member.subscriptionCreatedAt) }}<br>{{ alarmLabel(member.alarmMinutes) }}</span></template></td></tr></tbody></table>
+        <table class="data-table usage-table"><thead><tr><th>WQ_ID</th><th>地区</th><th>首次登录</th><th>最近登录 / 活跃</th><th>登录次数</th><th>有效会话</th><th>日历订阅</th><th>密码</th></tr></thead><tbody><tr v-for="member in usageMembers" :key="member.id"><td><strong>{{ member.wqId }}</strong><br><span v-if="!member.hasFullWqId" class="muted">重新登录或导入后补全</span><span v-if="!member.active" class="status rejected">已停用</span></td><td>{{ member.country }}</td><td>{{ formatUsageTime(member.firstLoginAt) }}</td><td>{{ formatUsageTime(member.lastLoginAt) }}<br><span class="muted">活跃：{{ formatUsageTime(member.lastActiveAt) }}</span></td><td>{{ member.loginCount }}</td><td><span class="status" :class="member.activeSessionCount ? 'published' : 'draft'">{{ member.activeSessionCount ? `${member.activeSessionCount} 个` : '无' }}</span></td><td><span class="status" :class="member.subscribed ? 'published' : 'draft'">{{ member.subscribed ? '已订阅' : '未订阅' }}</span><template v-if="member.subscribed"><br><span class="muted">{{ formatUsageTime(member.subscriptionCreatedAt) }}<br>{{ alarmLabel(member.alarmMinutes) }}</span></template></td><td><button class="button secondary small" type="button" @click="passwordMember=member">管理密码</button></td></tr></tbody></table>
         <div v-if="!usageMembers.length" class="empty-state">没有符合条件的成员。</div>
         <div v-else class="pagination-bar">
           <span class="fine-print">第 {{ (usagePagination.page - 1) * usagePagination.pageSize + 1 }}–{{ Math.min(usagePagination.page * usagePagination.pageSize, usagePagination.total) }} 名，共 {{ usagePagination.total }} 名</span>

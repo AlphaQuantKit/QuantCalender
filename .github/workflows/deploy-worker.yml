@@ -43,7 +43,7 @@ jobs:
               WQ_ID_HMAC_SECRET: $wq_id_hmac_secret,
               TURNSTILE_SECRET: $turnstile_secret,
               SESSION_SECRET: $session_secret
-            }' > "$secrets_file"
+            } + (if (env.MEMBER_SYNC_TOKEN // "") != "" then {MEMBER_SYNC_TOKEN: env.MEMBER_SYNC_TOKEN} else {} end)' > "$secrets_file"
           pnpm exec wrangler deploy \
             --secrets-file "$secrets_file" \
             --var "APP_ENV:production" \
@@ -57,3 +57,4 @@ jobs:
           WQ_ID_HMAC_SECRET: ${{ secrets.WQ_ID_HMAC_SECRET }}
           TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          MEMBER_SYNC_TOKEN: ${{ secrets.MEMBER_SYNC_TOKEN }}

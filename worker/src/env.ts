@@ -8,6 +8,7 @@ export interface Env {
   WQ_ID_HMAC_SECRET: string
   TURNSTILE_SECRET: string
   SESSION_SECRET: string
+  MEMBER_SYNC_TOKEN?: string
 }
 
 export type Role = 'member' | 'admin'
@@ -22,7 +23,10 @@ export interface SessionRecord {
   created_at: number
   last_seen_at: number
   wq_id_hint: string | null
-  country: 'CN' | 'HK' | null
+  country: string | null
   active: number | null
   public_wq_id: number | null
+  password_version: number
+  member_password_version: number | null
+  password_is_default: number | null
 }

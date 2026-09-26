@@ -4,6 +4,7 @@ import { Check, Copy, RefreshCw, Trash2 } from 'lucide-vue-next'
 import { defaultCalendarContentSelection, type CalendarContentSelection } from '@wq-calendar/shared'
 import { api, ApiError } from '../api'
 import { session } from '../state'
+import MemberPasswordForm from '../components/MemberPasswordForm.vue'
 
 const exists = ref(false)
 const alarmMinutes = ref(30)
@@ -82,10 +83,11 @@ async function revoke() { if (!confirm('撤销后，旧订阅地址将立即失�
 </script>
 
 <template>
-  <div class="page-head"><div><p class="eyebrow">MEMBER SETTINGS</p><h1>成员设置</h1><p class="subtitle">管理排行榜身份显示和个人日历订阅。</p></div></div>
+  <div class="page-head"><div><p class="eyebrow">MEMBER SETTINGS</p><h1>成员设置</h1><p class="subtitle">管理登录密码、排行榜身份显示和个人日历订阅。</p></div></div>
   <div v-if="error" class="error-box" style="margin-bottom:14px">{{ error }}</div>
   <div class="panel-grid">
     <div class="stack">
+      <MemberPasswordForm />
       <section class="card card-body stack"><div><h2>贡献者身份显示</h2><p class="subtitle">此设置统一作用于会议榜、回放榜和回放来源卡片；管理员始终可以查看完整 WQ_ID。</p></div><label class="preference-toggle"><input v-model="publicWqId" type="checkbox" :disabled="identityBusy" @change="updateIdentity" /><span><strong>向登录成员显示完整 WQ_ID</strong><small>{{ publicWqId ? '当前显示完整 ID；关闭后仅显示开头两个字母。' : '当前仅显示开头两个字母，不显示后续数字。' }}</small></span></label></section>
       <section class="card card-body stack">
         <div><h2>个人日历提醒</h2><p class="subtitle">生成专属订阅地址后，可加入 Google、Outlook 或 Apple Calendar。地址等同于访问凭证，请勿转发。重新生成新地址后，旧地址会立即作废。</p></div>

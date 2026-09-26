@@ -67,7 +67,7 @@ WQ Calendar 将会议安排、重要事项、成员投稿、管理员审批、�
 
 ### 普通成员
 
-1. 使用已导入名单中的 WQ_ID 登录。
+1. 使用已导入名单中的 WQ_ID 和日历站点密码登录；初始密码为自己的 WQ_ID，登录后请及时在“设置”修改。
 2. 在“会议日历”中查找会议、注册或提交新的会议信息。
 3. 在“回放”中浏览、补充回放来源或反馈失效链接。
 4. 在“重要事项”中查看 PPA、比赛和奖金日期，或投稿 PPA/比赛内容。
@@ -86,12 +86,65 @@ WQ Calendar 将会议安排、重要事项、成员投稿、管理员审批、�
 - 会议、重要事项和成员数据保存在 Cloudflare D1，不进入前端构建产物。
 - 登录使用随机不透明令牌，数据库只保存令牌哈希。
 - 登录 Cookie 设置为 `HttpOnly + Secure + SameSite=Strict`。
+- 成员自定义密码使用随机盐 PBKDF2-SHA256（100,000 次）与服务端 pepper 保存，密码和密码哈希均不会通过管理接口返回。
 - 修改请求同时验证会话、CSRF 和允许的前端来源。
 - WQ_ID 使用带服务端密钥的索引，并加密保存管理员所需的身份数据。
 - 私密日历订阅地址可以随时旋转或撤销。
 - 外部回放链接只做记录和人工审批，服务端不会主动访问网盘内容。
 
 请勿提交会议密码、个人专属入会链接、内部文件或参与者名单。
+
+## 成员密码与重置
+
+- 普通成员登录必须填写密码。已有成员和新导入成员的初始密码为本人的 WQ_ID（初始密码字母不区分大小写）；自定义密码严格区分大小写，保留空格。
+- 使用初始密码登录后跳转“成员设置”，并在站内持续提醒修改。提醒不强制阻止浏览或投稿；WQ_ID 可被他人知晓，因此应尽快改为独立密码，勿复用 BRAIN 平台密码。
+- 在“设置 → 修改登录密码”输入当前密码、新密码及确认密码。新密码须为 12–128 位，不能等于 WQ_ID 或当前密码。
+- 管理员在“管理 → 使用统计”按 WQ_ID 查询成员，点击该行“管理密码”，可以设置新密码或重置为 WQ_ID。操作需二次确认，仅影响所选成员，不能读取其原密码；重置停用成员不会重新启用账号。
+- 成员自行改密、管理员改密或重置后，该成员所有设备的旧登录会话立即失效；投稿、隐私偏好与日历订阅不变。忘记密码需联系管理员。
+- 手动名单导入及 Actions 平台同步不会覆盖既有密码，新成员仍以 WQ_ID 初始化。密码管理接口必须通过对应角色的会话、CSRF 和 Origin 校验，同步机器令牌不能使用。
+- 登录及改密有服务端限流，密码更新、审计日志与会话失效在同一数据库事务内完成；凭据版本防止并发登录重新启用旧密码会话。
+
+上线时先应用 `0010_member_passwords.sql` 并部署 Worker，再更新前端。迁移会一次性清除旧版无密码登录产生的**成员会话**，需重新输入 WQ_ID 和初始密码登录；管理员会话与日历订阅保留。迁移无需接触 BRAIN 账号密码，也不需批量解密旧成员 ID；初始密码通过原有加密索引验证，自定义密码单独保存加盐哈希。服务端 pepper 使用现有 `WQ_ID_HMAC_SECRET`，不得随意轮换该身份密钥。
+
+## 成员导入与平台定时同步
+
+支持所有地区的两位字母代码（如 CN、HK、US、IN、GB），不再按 CN/HK 限制导入或登录。
+
+- **手动导入**：后台“成员导入”上传表头为 `wq_id,country` 的 CSV；保留原有整体替换行为，缺失成员会停用，其会话与订阅会被撤销。
+- **自动同步**：GitHub Actions 使用 BRAIN 账号密码登录，复用会话 Cookie，分页读取 `/consultant/boards/genius?aggregate=user`；仅新增、更新抓到的成员，不停用名单外成员，不撤销已有会话、投稿或订阅。再次出现在榜单中的停用成员会重新启用。
+
+### 配置 GitHub Actions
+
+在仓库 **Settings → Secrets and variables → Actions** 配置：
+
+| 类型 | 名称 | 内容 |
+| --- | --- | --- |
+| Secret | `WQ_USERNAME` | 有权访问 genius 榜单的 BRAIN 登录账号（通常为邮箱） |
+| Secret | `WQ_PASSWORD` | 该账号的登录密码 |
+| Secret | `MEMBER_SYNC_TOKEN` | 独立的随机同步令牌，建议 32 随机字节的十六进制值；不能使用 BRAIN 密码或管理员密码 |
+| Variable | `VITE_API_BASE_URL` | 已部署 Worker 的 HTTPS 根地址，沿用前端部署配置，不含 `/v1` |
+| Variable | `MEMBER_SYNC_ENABLED` | 设置为 `true` 才启用定时执行；手动 Run workflow 不受此开关限制 |
+| Variable | `WQ_BOARD_DATE` | 可选，`YYYY-MM-DD`；默认北京时间昨天。填写后每日都会抓取该固定历史日期 |
+| Variable | `WQ_USER_FIELD` | 可选，默认 `user`；若 ID 位于嵌套对象，可设为 `user.id` |
+| Variable | `WQ_COUNTRY_FIELD` | 可选，默认 `country`；支持点分隔字段路径，如 `user.country` |
+
+1. 配好 Secret 后先运行 **Deploy Cloudflare Worker**，应用 `0009_global_members.sql` 并将同名 `MEMBER_SYNC_TOKEN` 安全注入 Worker。未设置该 Secret 时同步接口关闭，原有手动导入仍可用。平台账号密码只提供给同步任务，不会传给 Worker。
+2. 运行 **Deploy GitHub Pages** 更新前端（取消 CSV 地区限制及更新说明）。
+3. 在 Actions 手动运行 **Sync platform members**，可输入一次性的榜单日期覆盖仓库变量。确认成功后再设置 `MEMBER_SYNC_ENABLED=true`。
+4. 默认每日 **北京时间 12:43（UTC 04:43）** 执行，可修改 `.github/workflows/sync-members.yml` 的 cron。定时任务使用默认分支上的工作流，GitHub 可能延迟调度。
+
+脚本参照 `WQCode/src/wq_mining/worldquant/client.py`：Basic Auth `POST /authentication`，成功后保留 Cookie；分页遇到 401 重新登录一次；网络错误、429 和临时服务错误会有限重试并遵守 `Retry-After`。需要人工验证或账号无榜单权限时任务失败，不尝试绕过验证。
+
+分页按 `count` 动态校验人数，不写死 5980；无 `count` 时读至空页或明确的 `next: null`。遇到字段缺失、重复 ID、空榜单、分页人数不一致或请求失败会终止。不会静默跳过非法记录，也不会跟随平台提供的任意外部 URL。脚本完整抓取后才上传，每批最多 100 人；服务端暂存人数与预期人数一致才原子提交，可安全重试。失败的暂存批次不会修改有效成员名单，24 小时后由现有清理任务标记为 abandoned。
+
+服务端机器令牌仅开放 `/v1/automation/member-imports`，不能访问其他管理接口；手动管理仍要求管理员会话、CSRF 与允许的 Origin。同步只发送 WQ_ID 和地区，不持久化排名等额外平台信息；日志只记录人数、状态及日期，不输出密码、Cookie、完整名单，也不生成名单 artifact。成功后审计日志记录 `sync_members`、榜单日期、人数和 merge 模式。
+
+首次上线前建议按既有备份流程备份 D1。新迁移保留已有 ID、加密身份、隐私设置及关联数据，不修改旧迁移文件。同步脚本使用 Python 3.12；本地测试不需要任何真实凭据：
+
+```bash
+python -m pip install -r scripts/requirements.txt
+python -m unittest discover -s scripts/tests -v
+```
 
 ## 项目组成
 
@@ -108,6 +161,9 @@ pnpm install
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm --filter @wq-calendar/worker test:passwords:runtime
 ```
+
+最后一项在临时本地 workerd/D1 中使用虚构账号验证成员密码迁移、登录、自行改密、管理员修改/重置、会话撤销及订阅保留，不读取 `.dev.vars`，不访问线上数据库或 BRAIN。
 
 项目仍在持续完善中，欢迎通过 Issue 提交问题和改进建议。
