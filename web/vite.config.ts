@@ -7,5 +7,5 @@ export default defineConfig({
   // to /repository-name/ when previewing from a project-scoped Pages URL.
   base: process.env.VITE_BASE_PATH || '/',
   build: { sourcemap: false },
-  test: { environment: 'jsdom' }
+  test: { environment: 'jsdom', setupFiles: ['./tests/setup.ts'] }
 })

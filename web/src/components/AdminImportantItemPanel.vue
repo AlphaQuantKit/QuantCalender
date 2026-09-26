@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../i18n'
 import { computed, onMounted, ref } from 'vue'
 import { Pencil, Plus, RefreshCw, XCircle } from 'lucide-vue-next'
 import type { ImportantItem, ImportantItemInput, ImportantItemStatus } from '@wq-calendar/shared'
@@ -70,16 +71,16 @@ async function saveItem(item: ImportantItemInput) {
 
 async function decide(item: ImportantItem, decision: 'publish' | 'reject') {
   const verb = decision === 'publish' ? '通过并发布' : '拒绝'
-  if (!confirm(`确定${verb}这条重要事项投稿吗？`)) return
+  if (!confirm(t('确定{0}这条重要事项投稿吗？', [t(verb)]))) return
   try {
     await api(`/v1/admin/important-item-submissions/${item.id}/decision`, { method:'POST', body:JSON.stringify({ decision, reviewNote:reviewNotes.value[item.id] || '' }) })
-    notice.value = `重要事项投稿已${decision === 'publish' ? '发布' : '拒绝'}。`
+    notice.value = decision === 'publish' ? '重要事项已发布。' : '重要事项投稿已拒绝。'
     await load()
   } catch (caught) { error.value = caught instanceof ApiError ? caught.message : '审批失败' }
 }
 
 async function cancelItem(item: ImportantItem) {
-  if (!confirm('取消后会保留记录，并通过日历订阅同步取消。确定继续吗？')) return
+  if (!confirm(t('取消后会保留记录，并通过日历订阅同步取消。确定继续吗？'))) return
   try {
     await api(`/v1/admin/important-items/${item.id}/cancel`, { method:'POST', body:'{}' })
     notice.value = '重要事项已取消。'
@@ -90,27 +91,27 @@ async function cancelItem(item: ImportantItem) {
 
 <template>
   <div :class="{ 'admin-important-pending-embed':pendingOnly }">
-    <div v-if="!pendingOnly" class="section-title replay-admin-head"><div><h2>重要事项管理</h2><p class="fine-print">维护 PPA、比赛、奖金适用周期和关键日期；已发布日期修改后会同步到现有订阅。</p></div><div class="inline"><button class="button secondary small" type="button" @click="load"><RefreshCw :size="15" />刷新</button><button class="button small" type="button" @click="createItem"><Plus :size="15" />直接新增</button></div></div>
-    <div v-if="error" class="error-box" style="margin-bottom:14px">{{ error }}</div><div v-if="notice" class="success-box" style="margin-bottom:14px">{{ notice }}</div>
+    <div v-if="!pendingOnly" class="section-title replay-admin-head"><div><h2>{{ t("重要事项管理") }}</h2><p class="fine-print">{{ t("维护 PPA、比赛、奖金适用周期和关键日期；已发布日期修改后会同步到现有订阅。") }}</p></div><div class="inline"><button class="button secondary small" type="button" @click="load"><RefreshCw :size="15" />{{ t("刷新") }}</button><button class="button small" type="button" @click="createItem"><Plus :size="15" />{{ t("直接新增") }}</button></div></div>
+    <div v-if="error" class="error-box" style="margin-bottom:14px">{{ t(error) }}</div><div v-if="notice" class="success-box" style="margin-bottom:14px">{{ t(notice) }}</div>
 
     <section v-if="editorOpen" class="card card-body important-admin-editor">
-      <div class="section-title"><h3>{{ editing ? '编辑重要事项' : '新建重要事项' }}</h3><button class="icon-button" type="button" @click="editorOpen=false"><XCircle :size="19" /></button></div>
-      <div v-if="!editing" class="field important-status-select"><label>保存状态</label><select v-model="editorStatus"><option value="draft">保存为草稿</option><option value="published">立即发布</option></select></div>
-      <ImportantItemForm :initial="editing ? itemInput(editing) : undefined" :busy="busy" :allow-bonus="!editing?.submittedByMember" :submit-label="editing ? '保存修改' : editorStatus === 'draft' ? '保存草稿' : '发布重要事项'" @submit="saveItem" />
+      <div class="section-title"><h3>{{ t(editing ? '编辑重要事项' : '新建重要事项') }}</h3><button class="icon-button" type="button" @click="editorOpen=false"><XCircle :size="19" /></button></div>
+      <div v-if="!editing" class="field important-status-select"><label>{{ t("保存状态") }}</label><select v-model="editorStatus"><option value="draft">{{ t("保存为草稿") }}</option><option value="published">{{ t("立即发布") }}</option></select></div>
+      <ImportantItemForm :initial="editing ? itemInput(editing) : undefined" :busy="busy" :allow-bonus="!editing?.submittedByMember" :submit-label="t(editing ? '保存修改' : editorStatus === 'draft' ? '保存草稿' : '发布重要事项')" @submit="saveItem" />
     </section>
 
-    <div v-if="loading" class="empty-state">正在加载重要事项…</div>
-    <div v-else-if="!visibleItems.length" class="empty-state">{{ pendingOnly ? '当前没有待审核的重要事项投稿。' : '还没有重要事项记录。' }}</div>
+    <div v-if="loading" class="empty-state">{{ t("正在加载重要事项…") }}</div>
+    <div v-else-if="!visibleItems.length" class="empty-state">{{ t(pendingOnly ? '当前没有待审核的重要事项投稿。' : '还没有重要事项记录。') }}</div>
     <div v-else class="stack">
       <article v-for="item in visibleItems" :key="item.id" class="card card-body important-admin-card">
-        <div class="page-head important-admin-head"><div><div class="inline"><span class="tag">{{ KIND_LABELS[item.kind] }}</span><span class="status" :class="item.status">{{ STATUS_LABELS[item.status] }}</span></div><h3>{{ item.title }}</h3><p class="muted">{{ item.kind === 'bonus' ? '适用周期：' : '' }}{{ item.startDate }}—{{ item.endDate }}</p></div><button v-if="['draft','pending','published'].includes(item.status)" class="button secondary small" type="button" @click="editItem(item)"><Pencil :size="15" />编辑</button></div>
+        <div class="page-head important-admin-head"><div><div class="inline"><span class="tag">{{ t(KIND_LABELS[item.kind]) }}</span><span class="status" :class="item.status">{{ t(STATUS_LABELS[item.status]) }}</span></div><h3>{{ item.title }}</h3><p class="muted">{{ t(item.kind === 'bonus' ? '适用周期：' : '') }}{{ item.startDate }}—{{ item.endDate }}</p></div><button v-if="['draft','pending','published'].includes(item.status)" class="button secondary small" type="button" @click="editItem(item)"><Pencil :size="15" />{{ t("编辑") }}</button></div>
         <MarkdownContent v-if="item.contentMarkdown" :content="item.contentMarkdown" />
-        <div v-if="item.kind === 'bonus'" class="bonus-dates"><div><span>公布日期</span><strong>{{ item.announcementDate || '待确定' }}</strong></div><div><span>账单日期</span><strong>{{ item.paymentDate || '待确定' }}</strong></div></div>
+        <div v-if="item.kind === 'bonus'" class="bonus-dates"><div><span>{{ t("公布日期") }}</span><strong>{{ t(item.announcementDate || '待确定') }}</strong></div><div><span>{{ t("账单日期") }}</span><strong>{{ t(item.paymentDate || '待确定') }}</strong></div></div>
         <template v-if="item.status === 'pending'">
-          <div class="field" style="margin-top:14px"><label>给投稿人的反馈（可选）</label><textarea v-model="reviewNotes[item.id]" maxlength="1000" /></div>
-          <div class="inline" style="margin-top:12px"><button class="button" type="button" @click="decide(item,'publish')">通过并发布</button><button class="button danger" type="button" @click="decide(item,'reject')">拒绝</button></div>
+          <div class="field" style="margin-top:14px"><label>{{ t("给投稿人的反馈（可选）") }}</label><textarea v-model="reviewNotes[item.id]" maxlength="1000" /></div>
+          <div class="inline" style="margin-top:12px"><button class="button" type="button" @click="decide(item,'publish')">{{ t("通过并发布") }}</button><button class="button danger" type="button" @click="decide(item,'reject')">{{ t("拒绝") }}</button></div>
         </template>
-        <button v-else-if="item.status === 'published'" class="button danger small" type="button" style="margin-top:14px" @click="cancelItem(item)">取消事项</button>
+        <button v-else-if="item.status === 'published'" class="button danger small" type="button" style="margin-top:14px" @click="cancelItem(item)">{{ t("取消事项") }}</button>
       </article>
     </div>
   </div>

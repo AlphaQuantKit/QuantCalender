@@ -48,14 +48,15 @@ describe('LoginView', () => {
 
   it('directs members with a custom password to the calendar and retains admin login', async () => {
     vi.stubEnv('VITE_TURNSTILE_SITE_KEY', '')
-    vi.mocked(login).mockResolvedValue({ user: { role: 'member', passwordChangeRequired: false }, csrfToken: 'csrf' })
+    vi.mocked(login).mockResolvedValue({ user: { role: 'member', country: 'US', passwordChangeRequired: false }, csrfToken: 'csrf' })
     const wrapper = mount(LoginView)
     await wrapper.find('#wq-id').setValue('ID1234')
     await wrapper.find('#login-password').setValue('custom password')
     await wrapper.find('form').trigger('submit')
     await flushPromises()
     expect(routerPush).toHaveBeenCalledWith('/')
-    await wrapper.findAll('button').find(button => button.text() === '管理员')!.trigger('click')
+    // A US member's first login defaults to English if no preference was saved.
+    await wrapper.findAll('button').find(button => button.text() === 'Admin')!.trigger('click')
     await wrapper.find('#login-password').setValue('admin password')
     await wrapper.find('form').trigger('submit')
     await flushPromises()

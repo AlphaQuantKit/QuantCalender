@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, dateLocale } from '../i18n'
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { Calendar, ChevronLeft, ChevronRight, List, Plus, Search, X } from 'lucide-vue-next'
 import type { ImportantItem, ImportantItemInput, ImportantItemKind } from '@wq-calendar/shared'
@@ -48,7 +49,7 @@ function currentBeijingMonth(): MonthCursor {
 }
 
 function dateMs(value: string) { return Date.parse(`${value}T00:00:00Z`) }
-function formatDate(value: string) { return new Intl.DateTimeFormat('zh-CN', { year:'numeric', month:'long', day:'numeric', timeZone:'UTC' }).format(new Date(dateMs(value))) }
+function formatDate(value: string) { return new Intl.DateTimeFormat(dateLocale.value, { year:'numeric', month:'long', day:'numeric', timeZone:'UTC' }).format(new Date(dateMs(value))) }
 function dateRange(item: ImportantItem) { return item.startDate === item.endDate ? formatDate(item.startDate) : `${formatDate(item.startDate)}—${formatDate(item.endDate)}` }
 
 function statusLabel(item: ImportantItem) {
@@ -100,8 +101,8 @@ function entriesForDay(key: string): CalendarEntry[] {
   const entries: CalendarEntry[] = []
   for (const item of filtered.value) {
     if (item.kind !== 'bonus' && key >= item.startDate && key <= item.endDate) entries.push({ key:`${item.id}-range`, label:item.title, item, variant:'range' })
-    if (item.kind === 'bonus' && item.announcementDate === key) entries.push({ key:`${item.id}-announcement`, label:`公布 · ${item.title}`, item, variant:'announcement' })
-    if (item.kind === 'bonus' && item.paymentDate === key) entries.push({ key:`${item.id}-payment`, label:`账单 · ${item.title}`, item, variant:'payment' })
+    if (item.kind === 'bonus' && item.announcementDate === key) entries.push({ key:`${item.id}-announcement`, label:t('公布 · {0}', [item.title]), item, variant:'announcement' })
+    if (item.kind === 'bonus' && item.paymentDate === key) entries.push({ key:`${item.id}-payment`, label:t('账单 · {0}', [item.title]), item, variant:'payment' })
   }
   return entries
 }
@@ -155,46 +156,46 @@ async function submitItem(item: ImportantItemInput) {
 <template>
   <div>
     <div class="page-head">
-      <div><p class="eyebrow">IMPORTANT TIMELINE</p><h1>重要事项</h1><p class="subtitle">集中查看 PPA 主题、比赛安排与奖金关键日期；所有日期均为北京时间。</p></div>
+      <div><p class="eyebrow">IMPORTANT TIMELINE</p><h1>{{ t("重要事项") }}</h1><p class="subtitle">{{ t("集中查看 PPA 主题、比赛安排与奖金关键日期；所有日期均为北京时间。") }}</p></div>
       <div class="calendar-page-actions">
-        <button v-if="session.user?.role === 'member'" class="button" type="button" @click="openSubmission"><Plus :size="17" />投稿重要事项</button>
-        <div class="segmented" aria-label="切换重要事项视图"><button type="button" :class="{ active:view === 'timeline' }" @click="view='timeline'"><List :size="16" />时间线</button><button type="button" :class="{ active:view === 'month' }" @click="view='month'"><Calendar :size="16" />月历</button></div>
+        <button v-if="session.user?.role === 'member'" class="button" type="button" @click="openSubmission"><Plus :size="17" />{{ t("投稿重要事项") }}</button>
+        <div class="segmented" :aria-label="t('切换重要事项视图')"><button type="button" :class="{ active:view === 'timeline' }" @click="view='timeline'"><List :size="16" />{{ t("时间线") }}</button><button type="button" :class="{ active:view === 'month' }" @click="view='month'"><Calendar :size="16" />{{ t("月历") }}</button></div>
       </div>
     </div>
 
     <div class="filters important-filters">
-      <label class="important-search"><Search :size="17" /><input v-model="query" placeholder="搜索主题或内容" /></label>
-      <select v-model="kind"><option value="">全部类别</option><option value="ppa">PPA 主题</option><option value="competition">比赛主题</option><option value="bonus">奖金日程</option></select>
-      <button class="button secondary small" type="button" @click="query='';kind=''">清除</button>
+      <label class="important-search"><Search :size="17" /><input v-model="query" :placeholder="t('搜索主题或内容')" /></label>
+      <select v-model="kind"><option value="">{{ t("全部类别") }}</option><option value="ppa">{{ t("PPA 主题") }}</option><option value="competition">{{ t("比赛主题") }}</option><option value="bonus">{{ t("奖金日程") }}</option></select>
+      <button class="button secondary small" type="button" @click="query='';kind=''">{{ t("清除") }}</button>
     </div>
 
-    <div v-if="error" class="error-box">{{ error }}</div>
-    <div v-else-if="loading" class="empty-state">正在整理重要事项…</div>
-    <div v-else-if="!filtered.length" class="empty-state"><div><h2>暂时没有匹配的重要事项</h2><p>可以调整筛选条件，成员也可以提交 PPA 或比赛主题等待审核。</p></div></div>
+    <div v-if="error" class="error-box">{{ t(error) }}</div>
+    <div v-else-if="loading" class="empty-state">{{ t("正在整理重要事项…") }}</div>
+    <div v-else-if="!filtered.length" class="empty-state"><div><h2>{{ t("暂时没有匹配的重要事项") }}</h2><p>{{ t("可以调整筛选条件，成员也可以提交 PPA 或比赛主题等待审核。") }}</p></div></div>
 
     <div v-else-if="view === 'timeline'" class="important-timeline">
       <article v-for="item in timelineItems" :id="`important-item-${item.id}`" :key="item.id" class="card important-card" :class="[`kind-${item.kind}`, { cancelled:item.status === 'cancelled' }]">
         <div class="important-card-head">
-          <div><div class="inline"><span class="tag">{{ KIND_LABELS[item.kind] }}</span><span class="status" :class="item.status === 'cancelled' ? 'cancelled' : statusLabel(item) === '进行中' ? 'published' : statusLabel(item) === '已结束' ? 'ended' : 'pending'">{{ statusLabel(item) }}</span></div><h2>{{ item.title }}</h2></div>
-          <div class="important-date"><strong>{{ item.kind === 'bonus' ? '适用周期' : '持续时间' }}</strong><span>{{ dateRange(item) }}</span></div>
+          <div><div class="inline"><span class="tag">{{ t(KIND_LABELS[item.kind]) }}</span><span class="status" :class="item.status === 'cancelled' ? 'cancelled' : statusLabel(item) === '进行中' ? 'published' : statusLabel(item) === '已结束' ? 'ended' : 'pending'">{{ t(statusLabel(item)) }}</span></div><h2>{{ item.title }}</h2></div>
+          <div class="important-date"><strong>{{ t(item.kind === 'bonus' ? '适用周期' : '持续时间') }}</strong><span>{{ dateRange(item) }}</span></div>
         </div>
         <MarkdownContent v-if="item.contentMarkdown" :content="item.contentMarkdown" />
         <div v-if="item.kind === 'bonus'" class="bonus-dates">
-          <div><span>公布日期</span><strong>{{ item.announcementDate ? formatDate(item.announcementDate) : '待确定' }}</strong></div>
-          <div><span>账单日期</span><strong>{{ item.paymentDate ? formatDate(item.paymentDate) : '待确定' }}</strong></div>
+          <div><span>{{ t("公布日期") }}</span><strong>{{ t(item.announcementDate ? formatDate(item.announcementDate) : '待确定') }}</strong></div>
+          <div><span>{{ t("账单日期") }}</span><strong>{{ t(item.paymentDate ? formatDate(item.paymentDate) : '待确定') }}</strong></div>
         </div>
       </article>
     </div>
 
     <template v-else>
-      <div class="section-title important-month-title"><button class="icon-button" type="button" aria-label="上一个月" @click="shiftMonth(-1)"><ChevronLeft :size="18" /></button><h2>{{ monthCursor.year }} 年 {{ monthCursor.month }} 月</h2><button class="icon-button" type="button" aria-label="下一个月" @click="shiftMonth(1)"><ChevronRight :size="18" /></button></div>
+      <div class="section-title important-month-title"><button class="icon-button" type="button" :aria-label="t('上一个月')" @click="shiftMonth(-1)"><ChevronLeft :size="18" /></button><h2>{{ t("{0} 年 {1} 月", [monthCursor.year, monthCursor.month]) }}</h2><button class="icon-button" type="button" :aria-label="t('下一个月')" @click="shiftMonth(1)"><ChevronRight :size="18" /></button></div>
       <div class="month-calendar important-month">
-        <div class="month-head"><span v-for="day in ['日','一','二','三','四','五','六']" :key="day">周{{ day }}</span></div>
+        <div class="month-head"><span v-for="day in ['日','一','二','三','四','五','六']" :key="day">{{ t('周' + day) }}</span></div>
         <div class="month-grid">
           <div v-for="day in monthDays" :key="day.key" class="month-day" :class="{ outside:!day.current }">
             <span class="day-number" :class="{ today:day.key === beijingToday() }">{{ day.date.getUTCDate() }}</span>
-            <button v-for="entry in day.entries.slice(0,4)" :key="entry.key" type="button" class="calendar-chip important-chip" :class="[`kind-${entry.item.kind}`, entry.variant, { cancelled:entry.item.status === 'cancelled' }]" :title="entry.label" @click="focusItem(entry.item.id)">{{ entry.label }}</button>
-            <span v-if="day.entries.length > 4" class="more-items">另有 {{ day.entries.length - 4 }} 项</span>
+            <button v-for="entry in day.entries.slice(0,4)" :key="entry.key" type="button" class="calendar-chip important-chip" :class="[`kind-${entry.item.kind}`, entry.variant, { cancelled:entry.item.status === 'cancelled' }]" :title="entry.label" @click="focusItem(entry.item.id)">{{ t(entry.label) }}</button>
+            <span v-if="day.entries.length > 4" class="more-items">{{ t("另有 {0} 项", [day.entries.length - 4]) }}</span>
           </div>
         </div>
       </div>
@@ -202,9 +203,9 @@ async function submitItem(item: ImportantItemInput) {
 
     <div v-if="submitOpen" class="modal-backdrop" @click.self="closeSubmission">
       <section class="card card-body important-submit-dialog" role="dialog" aria-modal="true" aria-labelledby="important-submit-title" @keydown.esc="closeSubmission">
-        <div class="section-title"><div><p class="eyebrow">SUBMIT AN ITEM</p><h2 id="important-submit-title">投稿重要事项</h2><p class="subtitle">成员可以投稿 PPA 或比赛主题，通过审核后才会公开。</p></div><button class="icon-button" type="button" aria-label="关闭投稿窗口" @click="closeSubmission"><X :size="19" /></button></div>
-        <div v-if="submitSuccess" class="stack"><div class="success-box"><strong>投稿已进入审核队列。</strong><br />可以在“我的投稿”中查看结果。</div><div class="inline"><RouterLink class="button" to="/submissions" @click="closeSubmission">查看我的投稿</RouterLink><button class="button secondary" type="button" @click="submitSuccess=false">继续投稿</button></div></div>
-        <template v-else><div v-if="submitError" class="error-box">{{ submitError }}</div><ImportantItemForm :busy="submitBusy" @submit="submitItem" /></template>
+        <div class="section-title"><div><p class="eyebrow">SUBMIT AN ITEM</p><h2 id="important-submit-title">{{ t("投稿重要事项") }}</h2><p class="subtitle">{{ t("成员可以投稿 PPA 或比赛主题，通过审核后才会公开。") }}</p></div><button class="icon-button" type="button" :aria-label="t('关闭投稿窗口')" @click="closeSubmission"><X :size="19" /></button></div>
+        <div v-if="submitSuccess" class="stack"><div class="success-box"><strong>{{ t("投稿已进入审核队列。") }}</strong><br />{{ t("可以在“我的投稿”中查看结果。") }}</div><div class="inline"><RouterLink class="button" to="/submissions" @click="closeSubmission">{{ t("查看我的投稿") }}</RouterLink><button class="button secondary" type="button" @click="submitSuccess=false">{{ t("继续投稿") }}</button></div></div>
+        <template v-else><div v-if="submitError" class="error-box">{{ t(submitError) }}</div><ImportantItemForm :busy="submitBusy" @submit="submitItem" /></template>
       </section>
     </div>
   </div>

@@ -1,9 +1,11 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import AboutView from '../src/views/AboutView.vue'
+import { session } from '../src/state'
 
 describe('member guide', () => {
   it('shows member workflows instead of the old explanation content', () => {
+    session.user = { role:'member', memberId:'test', wqIdHint:'TEST01', country:'CN', publicWqId:true, passwordChangeRequired:false, expiresAt:'2099-01-01' }
     const wrapper = mount(AboutView, {
       global: {
         stubs: {

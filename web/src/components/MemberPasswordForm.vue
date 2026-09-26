@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../i18n'
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { memberPasswordChangeSchema } from '@wq-calendar/shared'
@@ -31,15 +32,15 @@ async function save() {
 
 <template>
   <section class="card card-body stack" id="member-password">
-    <div><h2>修改登录密码</h2><p class="subtitle">新密码须为 12–128 位，不能与 WQ_ID 或当前密码相同。自定义密码区分大小写，建议使用密码管理器生成。</p></div>
-    <p v-if="session.user?.passwordChangeRequired" class="notice-box">当前使用 WQ_ID 初始密码，请尽快修改。</p>
+    <div><h2>{{ t("修改登录密码") }}</h2><p class="subtitle">{{ t("新密码须为 12–128 位，不能与 WQ_ID 或当前密码相同。自定义密码区分大小写，建议使用密码管理器生成。") }}</p></div>
+    <p v-if="session.user?.passwordChangeRequired" class="notice-box">{{ t("当前使用 WQ_ID 初始密码，请尽快修改。") }}</p>
     <form class="stack" @submit.prevent="save">
-      <div class="field"><label for="current-password">当前密码</label><input id="current-password" v-model="currentPassword" type="password" autocomplete="current-password" required maxlength="128" /></div>
-      <div class="field"><label for="new-password">新密码</label><input id="new-password" v-model="newPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="128" /></div>
-      <div class="field"><label for="confirm-password">确认新密码</label><input id="confirm-password" v-model="confirmation" type="password" autocomplete="new-password" required minlength="12" maxlength="128" /></div>
-      <div v-if="error" class="error-box" role="alert">{{ error }}</div>
-      <p class="fine-print">修改后所有设备需重新登录，日历订阅保持有效。这是日历站点密码，请勿复用 BRAIN 平台密码。</p>
-      <button class="button" type="submit" :disabled="busy">{{ busy ? '正在修改…' : '保存新密码并重新登录' }}</button>
+      <div class="field"><label for="current-password">{{ t("当前密码") }}</label><input id="current-password" v-model="currentPassword" type="password" autocomplete="current-password" required maxlength="128" /></div>
+      <div class="field"><label for="new-password">{{ t("新密码") }}</label><input id="new-password" v-model="newPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="128" /></div>
+      <div class="field"><label for="confirm-password">{{ t("确认新密码") }}</label><input id="confirm-password" v-model="confirmation" type="password" autocomplete="new-password" required minlength="12" maxlength="128" /></div>
+      <div v-if="error" class="error-box" role="alert">{{ t(error) }}</div>
+      <p class="fine-print">{{ t("修改后所有设备需重新登录，日历订阅保持有效。这是日历站点密码，请勿复用 BRAIN 平台密码。") }}</p>
+      <button class="button" type="submit" :disabled="busy">{{ t(busy ? '正在修改…' : '保存新密码并重新登录') }}</button>
     </form>
   </section>
 </template>

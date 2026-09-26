@@ -1,5 +1,10 @@
 import { z } from 'zod'
 
+// Access depends on the authenticated member's stored country, never the UI locale.
+export function hasRegionalAccess(user: { role: string; country?: string | null } | null | undefined): boolean {
+  return user?.role === 'admin' || (user?.role === 'member' && ['CN', 'HK'].includes(user.country || ''))
+}
+
 // Platform country/region codes, without a geographic allowlist.
 export const countrySchema = z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, '地区须为两位字母代码')
 export const eventStatusSchema = z.enum(['draft', 'pending', 'published', 'rejected', 'cancelled'])

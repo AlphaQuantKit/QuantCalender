@@ -2,7 +2,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { readFileSync, readdirSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import worker from '../src/index'
-import { decryptWqId, hmacSha256, sha256 } from '../src/crypto'
+import { decryptWqId, encryptWqId, hmacSha256, sha256 } from '../src/crypto'
 import type { Env } from '../src/env'
 import { hashMemberPassword, verifyMemberPassword } from '../src/passwords'
 import { replaceMemberPassword } from '../src/member-passwords'
@@ -33,7 +33,12 @@ class Statement {
   }
   async first() { const { statement, values } = this.execute(); return statement.get(...values) || null }
   async all() { const { statement, values } = this.execute(); return { results: statement.all(...values), success: true } }
-  async run() { const { statement, values } = this.execute(); return { success: true, meta: statement.run(...values) } }
+  async run() {
+    const { statement, values } = this.execute()
+    return statement.columns().length
+      ? { success: true, results: statement.all(...values), meta: { changes: 0 } }
+      : { success: true, results: [], meta: statement.run(...values) }
+  }
 }
 
 let db: DatabaseSync
@@ -104,6 +109,131 @@ async function memberLogin(wqId = 'EXISTING', password = wqId) {
   return { response, data, headers: { cookie: response.headers.get('set-cookie')?.split(';')[0] || '',
     origin: 'https://calendar.test', 'x-csrf-token': data.csrfToken || '' } }
 }
+
+describe('country access and usage', () => {
+  it('advertises the regional access release without querying member data', async () => {
+    const response = await call('/health', undefined, {})
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ status: 'ok', features: expect.arrayContaining(['regional-access-v1', 'country-usage-v1']) })
+    expect(queryCount).toBe(0)
+  })
+
+  const meetingInput = (language: string) => ({
+    title: `Meeting-${language}`, category: '培训', meetingLanguage: language,
+    registrationUrl: 'https://example.com/register', startLocal: new Date(Date.now() + 86400000).toISOString().slice(0, 19),
+    durationMinutes: 60, recurrence: { kind: 'none', untilLocal: null }
+  })
+  async function seedMeetings() {
+    const ids: Record<string, string> = {}
+    for (const language of ['zh', 'en', 'bilingual', 'other']) {
+      const result = await call('/v1/admin/events', meetingInput(language), adminHeaders)
+      expect(result.status).toBe(201)
+      ids[language] = (await result.json() as { meeting: { id: string } }).meeting.id
+    }
+    return ids
+  }
+
+  it.each(['US', 'IN'])('allows only English meetings for %s and prevents direct URL, filter and locale bypasses', async country => {
+    await seedMember('global01', country)
+    const login = await memberLogin('GLOBAL01')
+    const ids = await seedMeetings()
+    const data = await (await call('/v1/meetings', undefined, { ...login.headers, 'accept-language': 'zh-CN' })).json() as any
+    expect(data.occurrences.map((item: any) => item.meetingLanguage)).toEqual(['en'])
+    expect(data.occurrences[0].hasReplay).toBe(false)
+    for (const language of ['zh', 'bilingual', 'other']) {
+      const filtered = await call(`/v1/meetings?meetingLanguage=${language}`, undefined, login.headers)
+      expect((await filtered.json() as any).occurrences).toEqual([])
+      for (const suffix of ['', '.ics']) expect((await call(`/v1/meetings/${ids[language]}${suffix}`, undefined, login.headers)).status).toBe(404)
+      expect((await call('/v1/submissions', meetingInput(language), login.headers)).status).toBe(403)
+    }
+    expect((await call(`/v1/meetings/${ids.en}.ics`, undefined, login.headers)).status).toBe(200)
+    expect((await call('/v1/submissions', meetingInput('en'), login.headers)).status).toBe(201)
+    for (const kind of ['meeting', 'replay', 'important']) expect((await call(`/v1/leaderboard?kind=${kind}`, undefined, login.headers)).status).toBe(403)
+    for (const path of ['/v1/replays', '/v1/replays/unknown', '/v1/replay-submissions/mine']) expect((await call(path, undefined, login.headers)).status).toBe(403)
+    for (const path of ['/v1/replay-submissions', '/v1/replay-links/unknown/reports']) expect((await call(path, {}, login.headers)).status).toBe(403)
+    expect((await call('/v1/important-items', undefined, login.headers)).status).toBe(200)
+  })
+
+  it.each(['CN', 'HK'])('retains all languages, replays and leaderboards for %s and admins', async country => {
+    await seedMember('regional01', country)
+    const login = await memberLogin('REGIONAL01')
+    const ids = await seedMeetings()
+    for (const headers of [login.headers, adminHeaders]) {
+      const data = await (await call('/v1/meetings', undefined, { ...headers, 'accept-language': 'en' })).json() as any
+      expect(data.occurrences).toHaveLength(4)
+      for (const id of Object.values(ids)) expect((await call(`/v1/meetings/${id}`, undefined, headers)).status).toBe(200)
+      expect((await call('/v1/replays', undefined, headers)).status).toBe(200)
+      expect((await call('/v1/leaderboard', undefined, headers)).status).toBe(200)
+    }
+  })
+
+  it('re-evaluates country for existing sessions, old subscriptions and old submissions', async () => {
+    await seedMember('traveler01', 'CN')
+    const login = await memberLogin('TRAVELER01')
+    await seedMeetings()
+    for (const language of ['zh', 'en', 'bilingual']) expect((await call('/v1/submissions', meetingInput(language), login.headers)).status).toBe(201)
+    const feed = await call('/v1/calendar-feed', { alarmMinutes: 30 }, login.headers)
+    const feedPath = new URL((await feed.json() as any).url).pathname
+    expect(await (await call(feedPath, undefined, {})).text()).toContain('Meeting-bilingual')
+    db.exec("UPDATE members SET country='US' WHERE id='traveler01'")
+    const restricted = await (await call(feedPath, undefined, {})).text()
+    expect(restricted).toContain('Meeting-en')
+    expect(restricted).not.toContain('Meeting-zh')
+    expect(restricted).not.toContain('Meeting-bilingual')
+    expect(restricted).not.toContain('Meeting-other')
+    const mine = await (await call('/v1/submissions/mine', undefined, login.headers)).json() as any
+    expect(mine.submissions.map((item: any) => item.meetingLanguage)).toEqual(['en'])
+    expect((await call('/v1/replays', undefined, login.headers)).status).toBe(403)
+    db.exec("UPDATE members SET country='HK' WHERE id='traveler01'")
+    expect(await (await call(feedPath, undefined, {})).text()).toContain('Meeting-bilingual')
+  })
+
+  it('counts unique users by country, paginates IDs, and keeps inactive and never-used counts distinct', async () => {
+    const now = Date.now()
+    for (let index = 0; index < 27; index++) {
+      const id = `us${String(index).padStart(2, '0')}`
+      await seedMember(id, 'US')
+      db.prepare('INSERT INTO member_activity VALUES (?, ?, ?, ?, ?)').run(id, now, now, now, 7)
+      db.prepare('UPDATE members SET wq_id_ciphertext = ? WHERE id = ?').run(await encryptWqId(id.toUpperCase(), env.WQ_ID_HMAC_SECRET), id)
+    }
+    await seedMember('never01', 'US')
+    await seedMember('legacy01', 'CN')
+    db.prepare('INSERT INTO member_activity VALUES (?, ?, ?, ?, ?)').run('legacy01', 1, 1, 1, 2)
+    db.exec("UPDATE members SET active=0 WHERE id='us00'")
+    const first = await call('/v1/admin/member-usage?country=us&filter=logged&pageSize=25', undefined, adminHeaders)
+    expect(first.status).toBe(200)
+    const data = await first.json() as any
+    expect(data.countries).toEqual([
+      { country: 'US', totalMembers: 28, usedMembers: 27, activeMembers: 27, active30Days: 26, subscribedMembers: 27 },
+      { country: 'CN', totalMembers: 1, usedMembers: 1, activeMembers: 1, active30Days: 0, subscribedMembers: 1 }
+    ])
+    expect(data.summary.loggedInMembers).toBe(27)
+    expect(data.pagination).toEqual({ page: 1, pageSize: 25, total: 27, totalPages: 2 })
+    expect(data.members).toHaveLength(25)
+    expect(data.members.every((member: any) => member.hasFullWqId && member.country === 'US')).toBe(true)
+    const second = await (await call('/v1/admin/member-usage?country=US&filter=logged&pageSize=25&page=2', undefined, adminHeaders)).json() as any
+    const all = [...data.members, ...second.members]
+    expect(new Set(all.map((member: any) => member.wqId)).size).toBe(27)
+    expect(all.find((member: any) => member.wqId === 'US00').active).toBe(false)
+    const exact = await (await call('/v1/admin/member-usage?country=US&q=US03&filter=logged', undefined, adminHeaders)).json() as any
+    expect(exact.members.map((member: any) => member.wqId)).toEqual(['US03'])
+    const legacy = await (await call('/v1/admin/member-usage?country=CN&filter=logged', undefined, adminHeaders)).json() as any
+    expect(legacy.members[0]).toMatchObject({ wqId: 'hint', hasFullWqId: false })
+    const unused = await (await call('/v1/admin/member-usage?country=US&filter=not_logged', undefined, adminHeaders)).json() as any
+    expect(unused.members.map((member: any) => member.id)).toEqual(['never01'])
+    expect((await call('/v1/admin/member-usage?country=USA', undefined, adminHeaders)).status).toBe(422)
+  })
+
+  it('never exposes usage totals or IDs to members, sync tokens or anonymous callers', async () => {
+    await seedMember('member01', 'CN')
+    const member = await memberLogin('MEMBER01')
+    for (const [headers, status] of [[{}, 401], [machine, 401], [member.headers, 403]] as const) {
+      expect((await call('/v1/admin/member-usage?country=CN&filter=logged', undefined, headers)).status).toBe(status)
+    }
+    const empty = await (await call('/v1/admin/member-usage?country=ZZ', undefined, adminHeaders)).json() as any
+    expect(empty.members).toEqual([])
+  })
+})
 
 describe('member passwords', () => {
   it('rejects passwordless sessions inserted by the old Worker after migration', async () => {

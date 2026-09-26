@@ -6,6 +6,7 @@ import {
   calendarFeedSchema,
   decisionSchema,
   exceptionSchema,
+  hasRegionalAccess,
   identityPreferenceSchema,
   meetingInputSchema,
   memberLoginSchema
@@ -38,6 +39,7 @@ import { listCalendarImportantItems, registerImportantItemRoutes } from './impor
 import { registerMemberImportRoutes } from './member-imports'
 import { registerMemberPasswordRoutes } from './member-passwords'
 import { verifyMemberPassword } from './passwords'
+import { requireRegionalAccess } from './access'
 
 type Variables = { session: SessionRecord }
 const app = new Hono<{ Bindings: Env; Variables: Variables }>()
@@ -60,7 +62,7 @@ app.use('*', async (context, next) => {
   await next()
 })
 
-app.get('/health', (context) => context.json({ status: 'ok', service: 'wq-meeting-calendar-api', features: ['replays-v1', 'important-items-v1'] }))
+app.get('/health', (context) => context.json({ status: 'ok', service: 'wq-meeting-calendar-api', features: ['replays-v1', 'important-items-v1', 'regional-access-v1', 'country-usage-v1'] }))
 
 function sessionUser(session: SessionRecord) {
   return {
@@ -225,7 +227,8 @@ app.get('/v1/meetings', requireAuth(), async (context) => {
   } catch {
     return apiError(context, 422, 'INVALID_DATE_RANGE', '日期范围无效')
   }
-  const events = await listPublishedEvents(context.env)
+  const regional = hasRegionalAccess(context.get('session'))
+  const events = await listPublishedEvents(context.env, regional)
   const exceptions = await listEventExceptions(context.env, events.map((event) => event.id))
   const query = (context.req.query('q') || '').trim().toLowerCase()
   const category = context.req.query('category') || ''
@@ -237,7 +240,7 @@ app.get('/v1/meetings', requireAuth(), async (context) => {
     .filter((item) => !meetingLanguage || item.meetingLanguage === meetingLanguage)
     .filter((item) => !locationType || item.locationType === locationType)
     .sort((left, right) => left.startUtc.localeCompare(right.startUtc))
-  const replayKeys = await publishedReplayOccurrenceKeys(context.env, occurrences.map((item) => item.eventId))
+  const replayKeys = regional ? await publishedReplayOccurrenceKeys(context.env, occurrences.map((item) => item.eventId)) : new Set<string>()
   return context.json({
     occurrences: occurrences.map((item) => ({
       ...item,
@@ -251,7 +254,7 @@ app.get('/v1/meetings/:id', requireAuth(), async (context) => {
   const wantsIcs = requested.endsWith('.ics')
   const eventId = wantsIcs ? requested.slice(0, -4) : requested
   const event = await context.env.DB.prepare("SELECT * FROM events WHERE id = ?1 AND status IN ('published', 'cancelled')").bind(eventId).first<EventRow>()
-  if (!event) return apiError(context, 404, 'NOT_FOUND', '会议不存在')
+  if (!event || (!hasRegionalAccess(context.get('session')) && event.meeting_language !== 'en')) return apiError(context, 404, 'NOT_FOUND', '会议不存在')
   const exceptions = await listEventExceptions(context.env, [event.id])
   if (wantsIcs) {
     const alarmParam = context.req.query('alarm')
@@ -264,7 +267,7 @@ app.get('/v1/meetings/:id', requireAuth(), async (context) => {
   return context.json({ meeting: publicEvent(event), exceptions })
 })
 
-app.get('/v1/leaderboard', requireAuth(), async (context) => {
+app.get('/v1/leaderboard', requireAuth(), requireRegionalAccess, async (context) => {
   type LeaderboardRow = {
     member_id: string
     wq_id_hint: string
@@ -385,6 +388,7 @@ app.post('/v1/submissions', requireAuth('member'), async (context) => {
   if (!await verifyMutation(context, session)) return apiError(context, 403, 'CSRF_FAILED', '安全校验失败')
   const input = await parseMeeting(context)
   if (input instanceof Response) return input
+  if (!hasRegionalAccess(session) && input.meetingLanguage !== 'en') return apiError(context, 403, 'REGION_RESTRICTED', '此功能仅对 CN/HK 成员开放')
   const event = await insertEvent(context.env, input, 'pending', session.member_id!, session.member_id)
   await audit(context.env, session, 'submit', 'event', event.id)
   return context.json({ submission: publicEvent(event) }, 201)
@@ -394,7 +398,7 @@ app.get('/v1/submissions/mine', requireAuth('member'), async (context) => {
   const session = context.get('session')
   const result = await context.env.DB.prepare("SELECT * FROM events WHERE submitter_member_id = ?1 AND status IN ('pending', 'published', 'rejected', 'cancelled') ORDER BY created_at DESC")
     .bind(session.member_id).all<EventRow>()
-  return context.json({ submissions: result.results.map(publicEvent) })
+  return context.json({ submissions: result.results.filter(event => hasRegionalAccess(session) || event.meeting_language === 'en').map(publicEvent) })
 })
 
 app.get('/v1/admin/submissions', requireAuth('admin'), async (context) => {
@@ -524,6 +528,9 @@ app.get('/v1/admin/member-usage', requireAuth('admin'), async (context) => {
   }
   const now = Date.now()
   type UsageSummaryRow = {
+    country: string
+    total_members: number
+    used_members: number
     active_members: number
     logged_in_members: number
     active_30_days: number
@@ -539,6 +546,9 @@ app.get('/v1/admin/member-usage', requireAuth('admin'), async (context) => {
   const conditions: string[] = []
   const conditionValues: Array<string | number> = []
   const query = normalizeWqId(context.req.query('q') || '')
+  const country = (context.req.query('country') || '').trim().toUpperCase()
+  if (country && !/^[A-Z]{2}$/.test(country)) return apiError(context, 422, 'INVALID_COUNTRY', '地区须为两位字母代码')
+  if (country) { conditions.push('m.country = ?'); conditionValues.push(country) }
   if (query) {
     if (query.length > 64) return apiError(context, 422, 'INVALID_QUERY', 'WQ_ID 查询条件无效')
     conditions.push('m.wq_id_hash = ?')
@@ -552,8 +562,12 @@ app.get('/v1/admin/member-usage', requireAuth('admin'), async (context) => {
   const whereSql = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
   const activeSince = now - 30 * 24 * 60 * 60 * 1000
 
-  const summary = await context.env.DB.prepare(`
+  // One grouped scan supplies both country and global totals. Never decrypt IDs
+  // for the summary; the existing bounded detail page does so for admins only.
+  const countrySummary = await context.env.DB.prepare(`
     SELECT
+      m.country, COUNT(*) AS total_members,
+      COALESCE(SUM(CASE WHEN ma.first_login_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS used_members,
       COALESCE(SUM(CASE WHEN m.active = 1 THEN 1 ELSE 0 END), 0) AS active_members,
       COALESCE(SUM(CASE WHEN m.active = 1 AND ma.first_login_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS logged_in_members,
       COALESCE(SUM(CASE WHEN m.active = 1 AND ma.last_active_at >= ?1 THEN 1 ELSE 0 END), 0) AS active_30_days,
@@ -561,7 +575,14 @@ app.get('/v1/admin/member-usage', requireAuth('admin'), async (context) => {
     FROM members m
     LEFT JOIN member_activity ma ON ma.member_id = m.id
     LEFT JOIN calendar_tokens ct ON ct.member_id = m.id AND ct.revoked_at IS NULL
-  `).bind(activeSince).first<UsageSummaryRow>()
+    GROUP BY m.country ORDER BY used_members DESC, m.country ASC
+  `).bind(activeSince).all<UsageSummaryRow>()
+  const summary = countrySummary.results.reduce((total, row) => ({
+    active_members: total.active_members + row.active_members,
+    logged_in_members: total.logged_in_members + row.logged_in_members,
+    active_30_days: total.active_30_days + row.active_30_days,
+    subscribed_members: total.subscribed_members + row.subscribed_members
+  }), { active_members: 0, logged_in_members: 0, active_30_days: 0, subscribed_members: 0 })
 
   const count = await context.env.DB.prepare(`
     SELECT COUNT(*) AS count
@@ -632,6 +653,10 @@ app.get('/v1/admin/member-usage', requireAuth('admin'), async (context) => {
       subscriptionRate: loggedInMembers ? Math.round(subscribedMembers / loggedInMembers * 1000) / 10 : 0
     },
     pagination: { page, pageSize, total, totalPages },
+    countries: countrySummary.results.map(row => ({
+      country: row.country, totalMembers: row.total_members, activeMembers: row.active_members,
+      usedMembers: row.used_members, active30Days: row.active_30_days, subscribedMembers: row.subscribed_members
+    })),
     members
   })
 })
@@ -709,11 +734,12 @@ app.delete('/v1/calendar-feed', requireAuth('member'), async (context) => {
 app.get('/ics/:token/calendar.ics', async (context) => {
   const tokenHash = await sha256(context.req.param('token'))
   const token = await context.env.DB.prepare(`
-    SELECT ct.alarm_minutes, ct.include_meetings, ct.include_ppa, ct.include_competition, ct.include_bonus
+    SELECT ct.alarm_minutes, ct.include_meetings, ct.include_ppa, ct.include_competition, ct.include_bonus, m.country
     FROM calendar_tokens ct
     JOIN members m ON m.id = ct.member_id
     WHERE ct.token_hash = ?1 AND ct.revoked_at IS NULL AND m.active = 1
   `).bind(tokenHash).first<{
+    country: string
     alarm_minutes: number
     include_meetings: number
     include_ppa: number
@@ -729,7 +755,7 @@ app.get('/ics/:token/calendar.ics', async (context) => {
   }
   const includeImportant = contentSelection.ppa || contentSelection.competition || contentSelection.bonus
   const [events, important] = await Promise.all([
-    contentSelection.meetings ? listPublishedEvents(context.env) : Promise.resolve([]),
+    contentSelection.meetings ? listPublishedEvents(context.env, hasRegionalAccess({ role: 'member', country: token.country })) : Promise.resolve([]),
     includeImportant ? listCalendarImportantItems(context.env) : Promise.resolve({ items:[], dates:[] })
   ])
   const exceptions = await listEventExceptions(context.env, events.map((event) => event.id))

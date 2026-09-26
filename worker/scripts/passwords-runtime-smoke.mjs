@@ -104,6 +104,25 @@ try {
   assert.equal(usageData.members[0].id, 'm1')
   assert.equal(usageData.members[0].wqId, 'LOCAL01')
   assert.equal(JSON.stringify(usageData).includes('password_hash'), false)
+  const byCountry = await (await request('/v1/admin/member-usage?country=US&filter=logged&q=LOCAL01', undefined, admin.headers)).json()
+  assert.deepEqual(byCountry.members.map(member => member.wqId), ['LOCAL01'])
+  assert.equal(byCountry.countries.find(country => country.country === 'US').usedMembers, 1)
+  assert.equal(byCountry.countries.find(country => country.country === 'GB').usedMembers, 1)
+  assert.equal((await request('/v1/admin/member-usage', undefined, custom.headers)).status, 403)
+  for (const endpoint of ['/v1/replays', '/v1/replay-submissions/mine', '/v1/leaderboard']) {
+    assert.equal((await request(endpoint, undefined, custom.headers)).status, 403)
+  }
+  for (const meetingLanguage of ['zh', 'en', 'bilingual', 'other']) {
+    const meeting = { title: `Runtime-${meetingLanguage}`, category: '培训', meetingLanguage, registrationUrl:'https://example.com/register',
+      startLocal:new Date(Date.now()+86400000).toISOString().slice(0,19), durationMinutes:60, recurrence:{kind:'none',untilLocal:null} }
+    const created = await request('/v1/admin/events', meeting, admin.headers)
+    assert.equal(created.status, 201)
+    const {meeting: event} = await created.json()
+    assert.equal((await request(`/v1/meetings/${event.id}`, undefined, custom.headers)).status, meetingLanguage === 'en' ? 200 : 404)
+    assert.equal((await request(`/v1/meetings/${event.id}.ics`, undefined, custom.headers)).status, meetingLanguage === 'en' ? 200 : 404)
+  }
+  const meetings = await (await request('/v1/meetings', undefined, custom.headers)).json()
+  assert.deepEqual(meetings.occurrences.map(meeting => meeting.meetingLanguage), ['en'])
 
   assert.equal((await request(passwordUrl, { action: 'set', newPassword: adminAssignedPassword }, admin.headers)).status, 200)
   assert.equal((await request('/v1/me', undefined, custom.headers)).status, 401)
@@ -120,7 +139,7 @@ try {
   const audit = await db.prepare("SELECT action, metadata_json FROM audit_logs WHERE entity_id='m1' ORDER BY created_at").all()
   assert.deepEqual(audit.results.map(row => row.action), ['change_password', 'set_member_password', 'reset_member_password'])
   assert(audit.results.every(row => row.metadata_json === '{}'))
-  console.log('PASS: local workerd/D1 migration, initial login, PBKDF2, self-change, admin set/reset, audit, session revocation and subscription preservation')
+  console.log('PASS: local workerd/D1 migration, passwords, session revocation, country access, country usage/IDs and subscription preservation')
 } finally {
   await mf.dispose()
 }

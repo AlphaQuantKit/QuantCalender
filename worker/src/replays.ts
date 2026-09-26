@@ -16,6 +16,7 @@ import type { Env, SessionRecord } from './env'
 import { sha256 } from './crypto'
 import { apiError, readJson } from './http'
 import { visibleMemberIdentity } from './identity'
+import { requireRegionalAccess } from './access'
 
 type CalendarApp = Hono<{ Bindings: Env; Variables: { session: SessionRecord } }>
 
@@ -264,7 +265,7 @@ function replayCreateError(context: Parameters<typeof apiError>[0], error: unkno
 }
 
 export function registerReplayRoutes(app: CalendarApp) {
-  app.get('/v1/replays', requireAuth(), async (context) => {
+  app.get('/v1/replays', requireAuth(), requireRegionalAccess, async (context) => {
     const session = context.get('session')
     const requestedPage = parsePage(context.req.query('page'))
     const query = (context.req.query('q') || '').trim()
@@ -316,7 +317,7 @@ export function registerReplayRoutes(app: CalendarApp) {
     })
   })
 
-  app.get('/v1/replays/:id', requireAuth(), async (context) => {
+  app.get('/v1/replays/:id', requireAuth(), requireRegionalAccess, async (context) => {
     const session = context.get('session')
     const group = await context.env.DB.prepare(`
       SELECT * FROM replay_groups rg WHERE rg.id = ?1
@@ -330,7 +331,7 @@ export function registerReplayRoutes(app: CalendarApp) {
     } })
   })
 
-  app.post('/v1/replay-submissions', requireAuth('member'), async (context) => {
+  app.post('/v1/replay-submissions', requireAuth('member'), requireRegionalAccess, async (context) => {
     const session = context.get('session')
     if (!await verifyMutation(context, session)) return apiError(context, 403, 'CSRF_FAILED', '安全校验失败')
     const parsed = replayInputSchema.safeParse(await readJson(context))
@@ -342,7 +343,7 @@ export function registerReplayRoutes(app: CalendarApp) {
     } catch (error) { return replayCreateError(context, error) }
   })
 
-  app.get('/v1/replay-submissions/mine', requireAuth('member'), async (context) => {
+  app.get('/v1/replay-submissions/mine', requireAuth('member'), requireRegionalAccess, async (context) => {
     const session = context.get('session')
     const requestedPage = parsePage(context.req.query('page'))
     const pageSize = 20
@@ -367,7 +368,7 @@ export function registerReplayRoutes(app: CalendarApp) {
     })
   })
 
-  app.post('/v1/replay-links/:id/reports', requireAuth('member'), async (context) => {
+  app.post('/v1/replay-links/:id/reports', requireAuth('member'), requireRegionalAccess, async (context) => {
     const session = context.get('session')
     if (!await verifyMutation(context, session)) return apiError(context, 403, 'CSRF_FAILED', '安全校验失败')
     const parsed = replayReportSchema.safeParse(await readJson(context))

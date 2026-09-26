@@ -36,20 +36,20 @@ jobs:
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
           VITE_TURNSTILE_SITE_KEY: ${{ vars.VITE_TURNSTILE_SITE_KEY }}
           VITE_BASE_PATH: ${{ vars.VITE_BASE_PATH }}
-      - name: Wait for replay API rollout
+      - name: Wait for regional access API rollout
         if: ${{ vars.VITE_API_BASE_URL != '' }}
         env:
           API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
         run: |
           for attempt in $(seq 1 60); do
-            if curl --fail --silent --show-error "$API_BASE_URL/health" | jq --exit-status '.features | index("replays-v1")' >/dev/null; then
-              echo "Replay API is ready."
+            if curl --fail --silent --show-error "$API_BASE_URL/health" | jq --exit-status '.features | (index("replays-v1") != null) and (index("regional-access-v1") != null) and (index("country-usage-v1") != null)' >/dev/null; then
+              echo "Regional access and country usage APIs are ready."
               exit 0
             fi
             echo "Waiting for Worker migration and deployment ($attempt/60)..."
             sleep 10
           done
-          echo "Replay API did not become ready; keeping the current Pages deployment."
+          echo "Regional access API did not become ready; keeping the current Pages deployment."
           exit 1
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4

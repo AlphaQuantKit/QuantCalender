@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../i18n'
 import { ref } from 'vue'
 import { CalendarDays } from 'lucide-vue-next'
 
@@ -41,7 +42,7 @@ function validityMessage(value: string): string {
 }
 
 function updateValidity(input: HTMLInputElement, value: string) {
-  input.setCustomValidity(validityMessage(value))
+  input.setCustomValidity(t(validityMessage(value)))
 }
 
 function onTextInput(event: Event) {
@@ -90,11 +91,11 @@ function openPicker() {
       maxlength="10"
       :required="required"
       :readonly="readonly"
-      :aria-label="ariaLabel"
+      :aria-label="t(ariaLabel)"
       @input="onTextInput"
       @blur="onTextBlur"
     />
-    <button v-if="!readonly" class="calendar-date-button" type="button" :aria-label="`${ariaLabel}：打开日期选择器`" @click="openPicker">
+    <button v-if="!readonly" class="calendar-date-button" type="button" :aria-label="t('{0}：打开日期选择器', [t(ariaLabel)])" @click="openPicker">
       <CalendarDays :size="18" aria-hidden="true" />
     </button>
     <input

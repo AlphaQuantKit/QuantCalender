@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AdminView from '../src/views/AdminView.vue'
 import AdminMemberPassword from '../src/components/AdminMemberPassword.vue'
 import { api } from '../src/api'
+import { setLocale } from '../src/i18n'
 
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('../src/api', () => ({ api: vi.fn(), ApiError: class ApiError extends Error {} }))
@@ -59,6 +60,42 @@ describe('Admin member import', () => {
 })
 
 describe('Admin password management entry', () => {
+  it('shows country totals and drills down to paginated user IDs, retaining the country filter', async () => {
+    vi.mocked(api).mockImplementation(async path => {
+      if (!path.startsWith('/v1/admin/member-usage')) return {submissions:[], events:[], occurrences:[], logs:[]}
+      const params = new URL(path,'https://test').searchParams
+      const page = Number(params.get('page') || 1)
+      return {
+        summary:{activeMembers:29, loggedInMembers:28, active30Days:27, subscribedMembers:3, subscriptionRate:10.7},
+        countries:[{country:'US',totalMembers:28,activeMembers:27,usedMembers:27,active30Days:26,subscribedMembers:2},{country:'CN',totalMembers:1,activeMembers:1,usedMembers:1,active30Days:1,subscribedMembers:1}],
+        pagination:{page,pageSize:25,total:27,totalPages:2},
+        members:[{id:'test',wqId:page===1?'US01':'US27',hasFullWqId:true,country:'US',active:true,loginCount:2,activeSessionCount:1,subscribed:false}]
+      }
+    })
+    const wrapper=shallowMount(AdminView)
+    await flushPromises()
+    await wrapper.findAll('button').find(button=>button.text()==='使用统计')!.trigger('click')
+    await flushPromises()
+    const table=wrapper.find('.table-scroll')
+    expect(table.text()).toContain('使用人数')
+    expect(table.findAll('tbody tr')).toHaveLength(2)
+    await table.find('button').trigger('click')
+    await flushPromises()
+    const usageCalls=()=>vi.mocked(api).mock.calls.filter(([path])=>path.startsWith('/v1/admin/member-usage'))
+    expect(usageCalls().at(-1)?.[0]).toContain('filter=logged&country=US')
+    expect(wrapper.find('.usage-table').text()).toContain('US01')
+    await wrapper.findAll('button').find(button=>button.text()==='下一页')!.trigger('click')
+    await flushPromises()
+    expect(usageCalls().at(-1)?.[0]).toContain('page=2')
+    expect(usageCalls().at(-1)?.[0]).toContain('country=US')
+    expect(wrapper.find('.usage-table').text()).toContain('US27')
+    setLocale('en')
+    await flushPromises()
+    expect(wrapper.text()).not.toMatch(/[\u3400-\u9fff]/)
+    expect(wrapper.text()).toContain('Usage by country')
+    wrapper.unmount()
+  })
+
   it('opens the selected member from usage statistics and refreshes after saving', async () => {
     vi.mocked(api).mockImplementation(async path => path.startsWith('/v1/admin/member-usage') ? {
       summary: { activeMembers: 2, loggedInMembers: 0, active30Days: 0, subscribedMembers: 0, subscriptionRate: 0 },

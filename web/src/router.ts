@@ -1,5 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
-import { bootstrapSession, session } from './state'
+import { bootstrapSession, regionalAccess, session } from './state'
 import LoginView from './views/LoginView.vue'
 import CalendarView from './views/CalendarView.vue'
 import MeetingDetailView from './views/MeetingDetailView.vue'
@@ -36,6 +36,7 @@ router.beforeEach(async (to) => {
   await bootstrapSession()
   if (to.meta.public) return session.user ? '/' : true
   if (!session.user) return '/login'
+  if (!regionalAccess.value && (to.path.startsWith('/replays') || to.path === '/leaderboard')) return '/'
   if (to.meta.admin && session.user.role !== 'admin') return '/'
   if (to.meta.member && session.user.role !== 'member') return '/admin'
   return true
