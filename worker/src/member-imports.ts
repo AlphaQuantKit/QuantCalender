@@ -12,6 +12,8 @@ import { apiError, readJson } from './http'
 type App = Hono<{ Bindings: Env; Variables: { session: SessionRecord } }>
 type ImportBatch = { id: string; status: string; total_rows: number; expected_rows: number | null; board_date: string | null }
 const syncSchema = z.object({ expectedRows: z.number().int().min(1).max(100000), boardDate: calendarDateSchema })
+// 3 shared + 4 per-row bindings stay below D1's 100-parameter limit.
+const ROWS_PER_STATEMENT = 20
 
 async function validSyncToken(token: string, expected: string): Promise<boolean> {
   if (expected.length < 32 || !token) return false
@@ -66,20 +68,35 @@ export function registerMemberImportRoutes(app: App) {
       const batch = await context.env.DB.prepare("SELECT id FROM member_imports WHERE id = ?1 AND source = ?2 AND status = 'staging'").bind(id, source).first()
       if (!batch) return apiError(context, 409, 'IMPORT_NOT_STAGING', '导入批次不可用')
       const recordDate = Temporal.Now.instant().toZonedDateTimeISO('Asia/Shanghai').toPlainDate().toString()
-      const statements: D1PreparedStatement[] = []
+      const rows = new Map<string, [string, string, string, string]>()
       for (const row of parsed.data.rows) {
         const normalized = normalizeWqId(row.wqId)
+        const hash = await hmacSha256(normalized, context.env.WQ_ID_HMAC_SECRET)
+        rows.set(hash, [hash, wqIdHint(normalized), await encryptWqId(normalized, context.env.WQ_ID_HMAC_SECRET), row.country])
+      }
+      // Count only new keys in this upload, not the entire growing import on
+      // every request. Deduplicate normalized IDs first; retries add zero.
+      // The counter and all inserts share one transaction, so failures roll back
+      // both and concurrent uploads cannot count the same key twice.
+      const statements: D1PreparedStatement[] = [context.env.DB.prepare(`
+        UPDATE member_imports SET total_rows = total_rows + (
+          SELECT COUNT(*) FROM json_each(?2) AS incoming
+          WHERE NOT EXISTS (SELECT 1 FROM member_import_rows WHERE import_id = ?1 AND wq_id_hash = incoming.value)
+        ) WHERE id = ?1 AND source = ?3 AND status = 'staging'
+      `).bind(id, JSON.stringify([...rows.keys()]), source)]
+      const values = [...rows.values()]
+      for (let offset = 0; offset < values.length; offset += ROWS_PER_STATEMENT) {
+        const chunk = values.slice(offset, offset + ROWS_PER_STATEMENT)
+        const placeholders = chunk.map((_, index) => `(?${4 + index * 4}, ?${5 + index * 4}, ?${6 + index * 4}, ?${7 + index * 4})`).join(', ')
         statements.push(context.env.DB.prepare(`
+          WITH incoming (wq_id_hash, wq_id_hint, wq_id_ciphertext, country) AS (VALUES ${placeholders})
           INSERT INTO member_import_rows (import_id, wq_id_hash, wq_id_hint, wq_id_ciphertext, country, record_date)
-          SELECT ?1, ?2, ?3, ?4, ?5, ?6
-          WHERE EXISTS (SELECT 1 FROM member_imports WHERE id = ?1 AND status = 'staging' AND source = ?7)
+          SELECT ?1, wq_id_hash, wq_id_hint, wq_id_ciphertext, country, ?2 FROM incoming
+          WHERE EXISTS (SELECT 1 FROM member_imports WHERE id = ?1 AND status = 'staging' AND source = ?3)
           ON CONFLICT(import_id, wq_id_hash) DO UPDATE SET wq_id_ciphertext = excluded.wq_id_ciphertext,
             country = excluded.country, record_date = excluded.record_date
-        `).bind(id, await hmacSha256(normalized, context.env.WQ_ID_HMAC_SECRET), wqIdHint(normalized),
-          await encryptWqId(normalized, context.env.WQ_ID_HMAC_SECRET), row.country, recordDate, source))
+        `).bind(id, recordDate, source, ...chunk.flat()))
       }
-      statements.push(context.env.DB.prepare(`UPDATE member_imports SET total_rows =
-        (SELECT COUNT(*) FROM member_import_rows WHERE import_id = ?1) WHERE id = ?1 AND status = 'staging'`).bind(id))
       await context.env.DB.batch(statements)
       const row = await context.env.DB.prepare('SELECT total_rows FROM member_imports WHERE id = ?1').bind(id).first<{ total_rows: number }>()
       return context.json({ stagedRows: row?.total_rows || 0 })

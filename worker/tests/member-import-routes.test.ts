@@ -9,12 +9,18 @@ import { replaceMemberPassword } from '../src/member-passwords'
 import { createSession, currentSession } from '../src/auth'
 import { Hono } from 'hono'
 
-// Real SQLite SQL + transaction semantics; only the D1 transport is substituted.
+// Real SQLite SQL + transaction semantics, with D1's Free-tier per-request
+// query budget and per-statement binding limit enforced by the transport.
+let queryCount = 0
+let maxBoundParameters = 0
 class Statement {
   values: SQLInputValue[] = []
   constructor(readonly db: DatabaseSync, readonly sql: string) {}
   bind(...values: SQLInputValue[]) { this.values = values; return this }
   execute() {
+    if (++queryCount > 50) throw new Error('D1_ERROR: Too many SQL queries')
+    maxBoundParameters = Math.max(maxBoundParameters, this.values.length)
+    if (this.values.length > 100) throw new Error('D1_ERROR: too many SQL variables')
     const values: SQLInputValue[] = []
     let index = 0
     const sql = this.sql.replace(/\?(\d+)?/g, (_, number: string | undefined) => {
@@ -38,6 +44,8 @@ const adminHeaders = { cookie: 'wq_session=test-admin', origin: 'https://calenda
 const base = '/v1/automation/member-imports'
 
 async function call(path: string, body?: unknown, headers: Record<string, string> = machine) {
+  queryCount = 0
+  maxBoundParameters = 0
   return worker.fetch(new Request(`https://api.test${path}`, {
     method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json', ...headers },
     ...(body === undefined ? {} : { body: JSON.stringify(body) })
@@ -64,6 +72,8 @@ async function seedMember(id = 'existing', country = 'HK') {
 }
 
 beforeEach(async () => {
+  queryCount = 0
+  maxBoundParameters = 0
   db = new DatabaseSync(':memory:')
   db.exec('PRAGMA foreign_keys=ON')
   for (const file of readdirSync(new URL('../migrations/', import.meta.url)).filter(name => name.endsWith('.sql')).sort()) {
@@ -256,6 +266,17 @@ describe('member import routes', () => {
     expect((await call(base, {})).status).toBe(401)
   })
 
+  it.each(['read', 'write'])('reports exhausted D1 daily %s quota without leaking the database error', async (operation) => {
+    env.DB.prepare = () => { throw new Error(`D1_ERROR: Your account has exceeded D1's free tier daily row ${operation} limit. private diagnostic`) }
+    const response = await call(base, { expectedRows: 1, boardDate: '2026-09-25' })
+    expect(response.status).toBe(503)
+    expect(Number(response.headers.get('Retry-After'))).toBeGreaterThan(0)
+    expect(Number(response.headers.get('Retry-After'))).toBeLessThanOrEqual(86400)
+    const body = await response.json() as { error: { code: string } }
+    expect(body.error.code).toBe('D1_DAILY_LIMIT')
+    expect(JSON.stringify(body)).not.toContain('private diagnostic')
+  })
+
   it('does not grant admin access or bypass manual CSRF checks', async () => {
     expect((await call('/v1/admin/member-imports', {})).status).toBe(401)
     expect((await call('/v1/admin/audit')).status).toBe(401)
@@ -278,6 +299,59 @@ describe('member import routes', () => {
     await stage(id)
     expect((await call(`${base}/${id}/commit`, {})).status).toBe(409)
     expect(db.prepare('SELECT COUNT(*) AS n FROM members').get()?.n).toBe(1)
+  })
+
+  it.each(['platform', 'manual'] as const)('stages and retries 100 %s rows within D1 limits', async (source) => {
+    const prefix = source === 'platform' ? base : '/v1/admin/member-imports'
+    const headers = source === 'platform' ? machine : adminHeaders
+    const created = await call(prefix, { expectedRows: 100, boardDate: '2026-09-25' }, headers)
+    const { importId } = await created.json() as { importId: string }
+    const rows = Array.from({ length: 100 }, (_, index) => ({ wqId: `BATCH${index.toString().padStart(3, '0')}`, country: 'US' }))
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await call(`${prefix}/${importId}/rows`, { rows }, headers)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ stagedRows: 100 })
+      expect(queryCount).toBeLessThanOrEqual(10)
+      expect(maxBoundParameters).toBeLessThanOrEqual(100)
+      expect(db.prepare('SELECT COUNT(*) AS n FROM members').get()?.n).toBe(0)
+    }
+    expect((await call(`${prefix}/${importId}/commit`, {}, headers)).status).toBe(200)
+    expect(db.prepare('SELECT COUNT(*) AS n FROM members').get()?.n).toBe(100)
+    for (const row of rows) {
+      const stored = db.prepare('SELECT wq_id_ciphertext FROM members WHERE wq_id_hash = ?')
+        .get(await hmacSha256(row.wqId, env.WQ_ID_HMAC_SECRET))
+      expect(await decryptWqId(String(stored?.wq_id_ciphertext), env.WQ_ID_HMAC_SECRET)).toBe(row.wqId)
+    }
+  })
+
+  it('rolls back the entire chunk if a later insert fails, then permits a retry', async () => {
+    const id = await create(101)
+    await stage(id)
+    db.exec(`CREATE TRIGGER reject_test_country BEFORE INSERT ON member_import_rows
+      WHEN NEW.country = 'ZZ' BEGIN SELECT RAISE(ABORT, 'synthetic insert failure'); END;`)
+    const rows = Array.from({ length: 100 }, (_, index) => ({ wqId: `ROLLBACK${index}`, country: index === 99 ? 'ZZ' : 'US' }))
+    expect((await call(`${base}/${id}/rows`, { rows })).status).toBe(500)
+    expect(db.prepare('SELECT total_rows FROM member_imports WHERE id = ?').get(id)?.total_rows).toBe(1)
+    expect(db.prepare('SELECT COUNT(*) AS n FROM member_import_rows WHERE import_id = ?').get(id)?.n).toBe(1)
+    expect((await call(`${base}/${id}/commit`, {})).status).toBe(409)
+    rows[99]!.country = 'US'
+    const retry = await call(`${base}/${id}/rows`, { rows })
+    expect(retry.status).toBe(200)
+    expect(await retry.json()).toEqual({ stagedRows: 101 })
+  })
+
+  it('counts normalized duplicates and overlapping chunks once while retaining the last update', async () => {
+    const id = await create(2)
+    await stage(id, 'DUP01', 'US')
+    const response = await call(`${base}/${id}/rows`, { rows: [
+      { wqId: 'dup01', country: 'GB' }, { wqId: 'NEW01', country: 'SG' },
+      { wqId: 'DUP01', country: 'IN' }, { wqId: 'new01', country: 'HK' }
+    ] })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ stagedRows: 2 })
+    expect(db.prepare('SELECT COUNT(*) AS n FROM member_import_rows').get()?.n).toBe(2)
+    expect((await call(`${base}/${id}/commit`, {})).status).toBe(200)
+    expect(db.prepare('SELECT country FROM members ORDER BY country').all().map(row => row.country)).toEqual(['HK', 'IN'])
   })
 
   it('merges worldwide members, encrypts IDs, preserves sessions and privacy, and commits idempotently', async () => {

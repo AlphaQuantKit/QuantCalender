@@ -88,6 +88,23 @@ class SyncTests(unittest.TestCase):
         with self.assertRaisesRegex(SyncError, "cooldown"):
             request(session, "GET", BRAIN_URL, sleeper=sleeper)
 
+    def test_daily_database_quota_fails_immediately_with_safe_actionable_error(self):
+        session, sleeper = Mock(), Mock()
+        session.request.return_value = response(503, {"error": {"code": "D1_DAILY_LIMIT", "message": "private response details"}})
+        with self.assertRaisesRegex(SyncError, r"D1 daily database quota.*08:00 Beijing") as error:
+            request(session, "POST", "https://calendar.test", sleeper=sleeper)
+        self.assertNotIn("private response details", str(error.exception))
+        self.assertEqual(session.request.call_count, 1)
+        sleeper.assert_not_called()
+
+    def test_unrelated_service_unavailable_responses_still_retry(self):
+        for payload in [{"error": "unavailable"}, {"error": {"code": "OTHER"}}, []]:
+            with self.subTest(payload=payload):
+                session, sleeper = Mock(), Mock()
+                session.request.side_effect = [response(503, payload), response()]
+                self.assertEqual(request(session, "GET", BRAIN_URL, sleeper=sleeper).status_code, 200)
+                sleeper.assert_called_once_with(1)
+
     def test_stage_all_rows_check_count_then_commit(self):
         session = Mock()
         import_id = "12345678-1234-1234-1234-123456789012"

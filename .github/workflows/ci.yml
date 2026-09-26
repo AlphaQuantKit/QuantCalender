@@ -25,6 +25,9 @@ jobs:
       - name: Validate member passwords in workerd and D1
         working-directory: worker
         run: node scripts/passwords-runtime-smoke.mjs
+      - name: Validate full-size member imports in workerd and D1
+        working-directory: worker
+        run: node scripts/member-imports-runtime-smoke.mjs
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

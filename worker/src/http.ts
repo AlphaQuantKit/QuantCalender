@@ -10,7 +10,7 @@ export function requestId(context: AppContext): string {
   return context.req.header('cf-ray') || crypto.randomUUID()
 }
 
-export function apiError(context: AppContext, status: 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500, code: string, message: string, fieldErrors?: Record<string, string[]>) {
+export function apiError(context: AppContext, status: 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 503, code: string, message: string, fieldErrors?: Record<string, string[]>) {
   return context.json({
     error: { code, message, fieldErrors, requestId: requestId(context) }
   }, status)

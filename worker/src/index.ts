@@ -760,6 +760,12 @@ app.get('/v1/admin/audit', requireAuth('admin'), async (context) => {
 app.notFound((context) => apiError(context, 404, 'NOT_FOUND', '接口不存在'))
 app.onError((error, context) => {
   console.error('Unhandled worker error', error)
+  if (/D1_ERROR:.*exceeded D1's free tier daily row (read|write) limit/i.test(error.message)) {
+    const now = Date.now()
+    const nextUtcDay = (Math.floor(now / 86400000) + 1) * 86400000
+    context.header('Retry-After', String(Math.ceil((nextUtcDay - now) / 1000)))
+    return apiError(context, 503, 'D1_DAILY_LIMIT', '数据库每日免费额度已耗尽，请在下次北京时间 08:00 额度重置后重试')
+  }
   if (error instanceof Error && error.message === 'INVALID_CONTENT_TYPE') return apiError(context, 422, 'INVALID_CONTENT_TYPE', '请求必须使用 JSON 格式')
   const message = context.env.APP_ENV === 'production' ? '服务暂时不可用，请稍后重试' : `本地开发错误：${error instanceof Error ? error.message : String(error)}`
   return apiError(context, 500, 'INTERNAL_ERROR', message)

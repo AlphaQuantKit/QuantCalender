@@ -34,6 +34,14 @@ def request(session, method, url, *, sleeper=time.sleep, **kwargs):
                 raise SyncError("Network request failed after retries") from None
             sleeper(min(2**attempt, 30))
             continue
+        if response.status_code == 503:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = None
+            error = payload.get("error") if isinstance(payload, dict) else None
+            if isinstance(error, dict) and error.get("code") == "D1_DAILY_LIMIT":
+                raise SyncError("Calendar D1 daily database quota exhausted; rerun after the next 00:00 UTC (08:00 Beijing) reset")
         if response.status_code not in RETRY_STATUSES or attempt == 4:
             return response
         delay = float(min(2**attempt, 30))
