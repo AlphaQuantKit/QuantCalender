@@ -140,14 +140,14 @@ WQ Calendar 将会议安排、重要事项、成员投稿、管理员审批、�
 | Secret | `MEMBER_SYNC_TOKEN` | 独立的随机同步令牌，建议 32 随机字节的十六进制值；不能使用 BRAIN 密码或管理员密码 |
 | Variable | `VITE_API_BASE_URL` | 已部署 Worker 的 HTTPS 根地址，沿用前端部署配置，不含 `/v1` |
 | Variable | `MEMBER_SYNC_ENABLED` | 设置为 `true` 才启用定时执行；手动 Run workflow 不受此开关限制 |
-| Variable | `WQ_BOARD_DATE` | 可选，`YYYY-MM-DD`；默认北京时间昨天。填写后每日都会抓取该固定历史日期 |
+| Variable | `WQ_BOARD_DATE` | 可选，`YYYY-MM-DD`；默认北京时间昨天。填写后每次同步都会抓取该固定历史日期 |
 | Variable | `WQ_USER_FIELD` | 可选，默认 `user`；若 ID 位于嵌套对象，可设为 `user.id` |
 | Variable | `WQ_COUNTRY_FIELD` | 可选，默认 `country`；支持点分隔字段路径，如 `user.country` |
 
 1. 配好 Secret 后先运行 **Deploy Cloudflare Worker**，应用 `0009_global_members.sql` 并将同名 `MEMBER_SYNC_TOKEN` 安全注入 Worker。未设置该 Secret 时同步接口关闭，原有手动导入仍可用。平台账号密码只提供给同步任务，不会传给 Worker。
 2. 运行 **Deploy GitHub Pages** 更新前端（取消 CSV 地区限制及更新说明）。
 3. 在 Actions 手动运行 **Sync platform members**，可输入一次性的榜单日期覆盖仓库变量。确认成功后再设置 `MEMBER_SYNC_ENABLED=true`。
-4. 默认每日 **北京时间 12:43（UTC 04:43）** 执行，可修改 `.github/workflows/sync-members.yml` 的 cron。定时任务使用默认分支上的工作流，GitHub 可能延迟调度。
+4. 默认每周一 **北京时间 12:43（UTC 04:43）** 执行，可修改 `.github/workflows/sync-members.yml` 的 cron；仍可通过 **Run workflow** 手动触发。定时任务使用默认分支上的工作流，GitHub 可能延迟调度。
 
 脚本参照 `WQCode/src/wq_mining/worldquant/client.py`：Basic Auth `POST /authentication`，成功后保留 Cookie；分页遇到 401 重新登录一次；网络错误、429 和临时服务错误会有限重试并遵守 `Retry-After`。需要人工验证或账号无榜单权限时任务失败，不尝试绕过验证。
 

@@ -2,8 +2,8 @@ name: Sync platform members
 
 on:
   schedule:
-    # 04:43 UTC = 12:43 Asia/Shanghai. GitHub schedules can be delayed.
-    - cron: '43 4 * * *'
+    # Mondays, 04:43 UTC = 12:43 Asia/Shanghai. GitHub schedules can be delayed.
+    - cron: '43 4 * * 1'
   workflow_dispatch:
     inputs:
       board_date:
