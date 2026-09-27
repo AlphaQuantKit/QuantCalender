@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { locale, setLocale, t, type Locale } from '../i18n'
-function change(event: Event) { setLocale((event.target as HTMLSelectElement).value as Locale) }
+import { locale, setLocale, t } from '../i18n'
 </script>
 
 <template>
-  <label class="language-selector"><span class="sr-only">{{ t('语言版本') }}</span><select :value="locale" :aria-label="t('语言版本')" @change="change"><option value="zh">中文</option><option value="en">English</option></select></label>
+  <div class="language-selector" role="group" :aria-label="t('语言版本')">
+    <button type="button" lang="zh-CN" :aria-pressed="locale === 'zh'" @click="setLocale('zh')">中文</button>
+    <button type="button" lang="en" aria-label="English" :aria-pressed="locale === 'en'" @click="setLocale('en')">EN</button>
+  </div>
 </template>

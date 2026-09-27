@@ -211,7 +211,6 @@ async function submitMeeting(meeting: MeetingInput) {
       </div>
     </div>
 
-    <p v-if="!regionalAccess" class="notice-box">{{ t('仅显示英文会议。中文、双语及其他语言会议、回放和排行榜仅对 CN/HK 成员开放；切换界面语言不会改变访问范围。') }}</p>
     <div class="filters">
       <label style="position:relative"><Search :size="17" style="position:absolute;left:13px;top:13px;color:#839096" /><input v-model="query" style="width:100%;padding-left:39px" :placeholder="t('搜索会议、主办方或讲者')" /></label>
       <select v-model="category"><option value="">{{ t("全部类别") }}</option><option v-for="item in categories" :key="item" :value="item">{{ t(item) }}</option></select>

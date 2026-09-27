@@ -4,7 +4,6 @@ export const en: Record<string, string> = {
   '重要事项投稿已拒绝。': 'Important date submission rejected.',
   '管理登录密码和个人日历订阅。': 'Manage your sign-in password and personal calendar subscription.',
   '周日': 'Sun', '周一': 'Mon', '周二': 'Tue', '周三': 'Wed', '周四': 'Thu', '周五': 'Fri', '周六': 'Sat',
-  '仅显示英文会议。中文、双语及其他语言会议、回放和排行榜仅对 CN/HK 成员开放；切换界面语言不会改变访问范围。': 'Only English meetings are shown. Meetings in Chinese, bilingual or other languages, replays and leaderboards are available to CN/HK members only. Changing the interface language does not change access.',
   '请先登录': 'Please sign in first', '没有执行此操作的权限': 'You do not have permission to perform this action',
   '请检查重要事项信息': 'Please check the important date details', '重要事项类别无效': 'Invalid important date category',
   '安全校验失败': 'Security check failed', '奖金日程仅限管理员维护': 'Only admins can manage bonus dates',
